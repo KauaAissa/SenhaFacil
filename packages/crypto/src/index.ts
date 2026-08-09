@@ -1,12 +1,16 @@
 /**
  * @senha-facil/crypto
  *
- * Utilitários de criptografia client-side compartilhados entre o app mobile
- * e qualquer outro pacote que precise de operações criptográficas.
+ * Client-side cryptography utilities (Zero-Knowledge architecture).
  *
- * IMPORTANTE: Este pacote deve rodar APENAS no cliente (dispositivo do usuário).
- * A chave de criptografia (derivada via KDF) nunca deve ser enviada ao servidor.
+ * IMPORTANT: This package runs ONLY on the client device.
+ * The derived encryption key NEVER leaves the device.
+ *
+ * Requires Web Crypto API (globalThis.crypto.subtle):
+ *   - Expo / React Native: Hermes ≥ 0.12 (Expo SDK ≥ 50) ✓
+ *   - Node.js ≥ 18 ✓
  */
 
-// Exportado no próximo módulo de desenvolvimento (Passo 2)
-export {};
+export { deriveKey, generateSalt } from './kdf';
+export { encryptVaultItem, decryptVaultItem } from './vault';
+export type { EncryptedPayload, VaultItemPlaintext } from './types';

@@ -22,7 +22,10 @@
     "react-native-gesture-handler": "~2.16.0",
     "zustand": "^4.5.0",
     "zod": "^3.22.0",
-    "@tanstack/react-query": "^5.0.0"
+    "@tanstack/react-query": "^5.0.0",
+    "@react-native-community/netinfo": "^11.0.0",
+    "expo-sqlite": "~14.0.0",
+    "@senha-facil/crypto": "workspace:*"
   },
   "devDependencies": {
     "@babel/core": "^7.24.0",
