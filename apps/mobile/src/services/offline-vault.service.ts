@@ -206,6 +206,58 @@ class OfflineVaultService {
   }
 
   /**
+   * Swaps a client-assigned local ID for the server-assigned ID.
+   * Called by SyncService when a new offline item reaches the server and
+   * the server creates it with a different (server-generated) ID.
+   *
+   * SQLite does not allow updating a primary key in-place, so we:
+   *   1. Copy the row with the new ID
+   *   2. Delete the old row
+   * Both steps run in a single transaction for atomicity.
+   */
+  async remapItemId(oldId: string, newId: string): Promise<void> {
+    type Row = {
+      label: string;
+      category: string;
+      encrypted_payload: string;
+      iv: string;
+      requires_approval: number;
+      is_favorite: number;
+      created_at: string;
+      updated_at: string;
+    };
+
+    await this.database.withTransactionAsync(async () => {
+      const row = await this.database.getFirstAsync<Row>(
+        'SELECT * FROM vault_items WHERE id = ?',
+        [oldId],
+      );
+
+      if (!row) return; // Already remapped or deleted — no-op
+
+      await this.database.runAsync(
+        `INSERT INTO vault_items
+           (id, label, category, encrypted_payload, iv,
+            requires_approval, is_favorite, synced, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+        [
+          newId,
+          row.label,
+          row.category,
+          row.encrypted_payload,
+          row.iv,
+          row.requires_approval,
+          row.is_favorite,
+          row.created_at,
+          row.updated_at,
+        ],
+      );
+
+      await this.database.runAsync('DELETE FROM vault_items WHERE id = ?', [oldId]);
+    });
+  }
+
+  /**
    * Full replace from server data (used after login or reconnection).
    * All existing local rows are dropped and replaced with server rows (marked synced=1).
    *

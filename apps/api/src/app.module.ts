@@ -6,6 +6,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { AccessModule } from './access/access.module';
+import { VaultModule } from './vault/vault.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { AccessModule } from './access/access.module';
     AuthModule,
     NotificationsModule,
     AccessModule,
+    VaultModule,
   ],
 })
 export class AppModule {}
