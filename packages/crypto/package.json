@@ -1,0 +1,13 @@
+{
+  "name": "@senha-facil/crypto",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint src/**/*.ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}

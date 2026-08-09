@@ -1,0 +1,209 @@
+// =============================================================================
+// Senha Fácil — Prisma Schema
+// Arquitetura: Zero-Knowledge Encryption + Assisted Access Flow
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// USER
+// Representa tanto o Idoso (ELDERLY) quanto o Familiar/Cuidador (CAREGIVER).
+// A separação por `role` evita tabelas duplicadas e simplifica relações.
+// =============================================================================
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  phone        String?  @unique
+  name         String
+
+  /// Hash Argon2id da senha mestre — usada APENAS para autenticação no servidor.
+  /// A chave de criptografia do cofre é derivada no cliente e NUNCA enviada.
+  passwordHash String
+
+  role      UserRole @default(ELDERLY)
+  isActive  Boolean  @default(true)
+
+  /// Token FCM para notificações push de Acesso Assistido.
+  /// Atualizado a cada login no app do familiar.
+  fcmToken  String?
+
+  /// Salt público para Key Derivation Function (PBKDF2/Argon2id).
+  /// Armazenado no servidor para permitir sincronização entre dispositivos.
+  /// O salt é PÚBLICO — sem ele não é possível derivar a chave de criptografia.
+  kdfSalt   String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // --- Relações ---
+  vaultItems         VaultItem[]
+  elderlyRelations   TrustedContact[] @relation("ElderlyUser")
+  caregiverRelations TrustedContact[] @relation("CaregiverUser")
+  requestedAccess    AccessLog[]      @relation("AccessRequester")
+  approvedAccess     AccessLog[]      @relation("AccessApprover")
+
+  @@map("users")
+}
+
+enum UserRole {
+  ELDERLY    // Usuário idoso: dono do cofre de senhas
+  CAREGIVER  // Familiar/cuidador: autoriza acessos assistidos
+}
+
+// =============================================================================
+// TRUSTED CONTACT
+// Relação Many-to-Many entre Idoso e Familiar.
+// Um idoso pode ter múltiplos familiares; um familiar pode cuidar de múltiplos idosos.
+// =============================================================================
+model TrustedContact {
+  id          String               @id @default(cuid())
+  elderlyId   String
+  caregiverId String
+  status      TrustedContactStatus @default(PENDING)
+
+  /// Permissões granulares concedidas pelo idoso ao familiar.
+  permissions VaultPermission[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  elderly   User @relation("ElderlyUser",   fields: [elderlyId],   references: [id], onDelete: Cascade)
+  caregiver User @relation("CaregiverUser", fields: [caregiverId], references: [id], onDelete: Cascade)
+
+  /// Garante que um par (idoso, familiar) seja único.
+  @@unique([elderlyId, caregiverId])
+  @@index([elderlyId])
+  @@index([caregiverId])
+  @@map("trusted_contacts")
+}
+
+enum TrustedContactStatus {
+  PENDING  // Convite enviado, aguardando aceite do familiar
+  ACTIVE   // Familiar aceitou — relação ativa
+  REVOKED  // Acesso revogado pelo idoso
+}
+
+enum VaultPermission {
+  VIEW_ITEMS     // Pode ver a lista de itens (sem descriptografar)
+  APPROVE_ACCESS // Pode aprovar/negar solicitações de Acesso Assistido
+  MANAGE_ITEMS   // Pode adicionar/editar itens em nome do idoso
+}
+
+// =============================================================================
+// VAULT ITEM
+// Entrada criptografada no cofre de senhas do idoso.
+//
+// ZERO-KNOWLEDGE: O campo `encryptedPayload` contém um JSON cifrado com
+// AES-256-GCM no dispositivo do usuário. O servidor armazena APENAS o blob
+// cifrado e o IV. O plaintext NUNCA trafega pela rede ou é armazenado no DB.
+//
+// Estrutura do plaintext (antes da cifragem):
+// {
+//   "login": "usuario@banco.com",
+//   "password": "minha-senha-secreta",
+//   "url": "https://banco.com.br",
+//   "notes": "Conta corrente principal"
+// }
+// =============================================================================
+model VaultItem {
+  id       String        @id @default(cuid())
+  userId   String
+  label    String        // Nome legível: "Banco do Brasil", "Instagram"
+  category VaultCategory
+
+  /// Payload cifrado: Base64( AES-256-GCM( JSON_payload ) )
+  encryptedPayload String
+
+  /// IV (Nonce) do AES-GCM: Base64( 12 bytes aleatórios )
+  /// DEVE ser único por item e por atualização. Nunca reutilizar.
+  iv               String
+
+  /// Se true, o acesso ao item dispara o fluxo de Acesso Assistido
+  /// enviando uma notificação FCM para os familiares ativos.
+  requiresApproval Boolean @default(false)
+
+  isFavorite Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessLogs AccessLog[]
+
+  @@index([userId])
+  @@index([userId, category])
+  @@map("vault_items")
+}
+
+enum VaultCategory {
+  BANKING      // Banco, cartão de crédito
+  SOCIAL_MEDIA // Redes sociais
+  EMAIL        // Contas de e-mail
+  HEALTH       // Plano de saúde, exames online
+  GOVERNMENT   // Gov.br, INSS, Receita Federal
+  SHOPPING     // E-commerce
+  OTHER        // Demais categorias
+}
+
+// =============================================================================
+// ACCESS LOG
+// Registro de auditoria de cada solicitação de Acesso Assistido.
+//
+// Fluxo:
+// 1. Idoso tenta acessar item com requiresApproval=true → status=PENDING
+// 2. Backend envia FCM push para o familiar → expiresAt define o timeout
+// 3a. Familiar aprova → status=APPROVED → app descriptografa localmente
+// 3b. Familiar nega   → status=DENIED
+// 3c. Timeout sem resposta → status=EXPIRED
+// 3d. Sem conexão / fallback → status=FALLBACK_GRANTED, fallbackUsed=true
+// =============================================================================
+model AccessLog {
+  id          String       @id @default(cuid())
+  vaultItemId String
+  requesterId String       // Idoso que solicitou o acesso
+  approverId  String?      // Familiar que agiu na solicitação (null se PENDING/EXPIRED/FALLBACK)
+
+  status       AccessStatus @default(PENDING)
+
+  /// true quando o acesso foi concedido pelo mecanismo de fallback offline
+  /// (ex.: PIN local de emergência configurado previamente).
+  fallbackUsed Boolean @default(false)
+
+  requestedAt DateTime  @default(now())
+
+  /// Janela de expiração da solicitação (recomendado: 2 a 5 minutos).
+  /// Após este prazo sem resposta, o status muda para EXPIRED.
+  expiresAt   DateTime
+
+  resolvedAt  DateTime? // Preenchido quando o status muda de PENDING
+
+  /// Metadados de auditoria (não sensíveis). Hash do IP para rastreabilidade.
+  /// Exemplo: {"os":"iOS 17","appVersion":"1.0.0","ipHash":"sha256:abcdef..."}
+  deviceInfo  String?
+
+  /// Motivo opcional fornecido pelo familiar ao negar (para transparência com o idoso).
+  notes String?
+
+  vaultItem VaultItem @relation(fields: [vaultItemId], references: [id], onDelete: Cascade)
+  requester User      @relation("AccessRequester", fields: [requesterId], references: [id])
+  approver  User?     @relation("AccessApprover",  fields: [approverId],  references: [id])
+
+  @@index([vaultItemId])
+  @@index([requesterId])
+  @@index([status, expiresAt]) // Para jobs de expiração automática
+  @@map("access_logs")
+}
+
+enum AccessStatus {
+  PENDING          // Aguardando resposta do familiar
+  APPROVED         // Familiar aprovou
+  DENIED           // Familiar negou
+  EXPIRED          // Timeout sem resposta
+  FALLBACK_GRANTED // Acesso concedido via mecanismo de fallback offline
+}

@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.expo/
+.turbo/
+*.env
+*.env.local
+.DS_Store
