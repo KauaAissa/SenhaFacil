@@ -6,12 +6,12 @@ import type { RegisterDto } from './dto/register.dto';
 import type { LoginDto } from './dto/login.dto';
 
 /** Argon2id parameters — OWASP 2023 recommendation for interactive logins */
-const ARGON2_OPTIONS: argon2.Options = {
+const ARGON2_OPTIONS = {
   type: argon2.argon2id,
   memoryCost: 65_536, // 64 MB
   timeCost: 3,
   parallelism: 4,
-};
+} satisfies argon2.Options;
 
 /**
  * Pre-computed hash used for constant-time password verification even when

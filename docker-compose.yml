@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: senha-facil-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: senha_facil
+      POSTGRES_PASSWORD: senha_facil
+      POSTGRES_DB: senha_facil
+    ports:
+      - "5432:5432"
+    volumes:
+      - senha-facil-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U senha_facil -d senha_facil"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  senha-facil-postgres-data:
