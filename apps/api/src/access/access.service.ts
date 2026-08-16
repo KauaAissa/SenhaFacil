@@ -171,6 +171,46 @@ export class AccessService {
     return { status: updated.status, resolvedAt: updated.resolvedAt };
   }
 
+  // ─── GET /access/pending ────────────────────────────────────────────────────
+
+  /**
+   * Lists PENDING (non-expired) access requests visible to a caregiver —
+   * i.e., requests raised by elderly users who have an ACTIVE relationship
+   * with APPROVE_ACCESS permission granted to this caregiver.
+   *
+   * Serves as a fallback UI when the FCM push is missed or delayed.
+   */
+  async findPendingForCaregiver(caregiverId: string) {
+    const activeElderlyIds = await this.prisma.trustedContact.findMany({
+      where: {
+        caregiverId,
+        status: 'ACTIVE',
+        permissions: { has: 'APPROVE_ACCESS' },
+      },
+      select: { elderlyId: true },
+    });
+
+    const elderlyIds = activeElderlyIds.map((c) => c.elderlyId);
+    if (elderlyIds.length === 0) return [];
+
+    return this.prisma.accessLog.findMany({
+      where: {
+        status: 'PENDING',
+        expiresAt: { gt: new Date() },
+        requesterId: { in: elderlyIds },
+      },
+      select: {
+        id: true,
+        status: true,
+        requestedAt: true,
+        expiresAt: true,
+        requester: { select: { id: true, name: true } },
+        vaultItem: { select: { id: true, label: true, category: true } },
+      },
+      orderBy: { requestedAt: 'asc' },
+    });
+  }
+
   // ─── Called by AccessExpiryService (cron) ─────────────────────────────────
 
   /**

@@ -1,0 +1,43 @@
+{
+  "expo": {
+    "name": "Senha Fácil",
+    "slug": "senha-facil",
+    "scheme": "senhafacil",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "icon": "./assets/icon.png",
+    "splash": {
+      "backgroundColor": "#FFFFFF"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.senhafacil.app",
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "Usamos Face ID para proteger o acesso ao seu cofre de senhas."
+      }
+    },
+    "android": {
+      "package": "com.senhafacil.app",
+      "permissions": ["USE_BIOMETRIC", "USE_FINGERPRINT"],
+      "adaptiveIcon": {
+        "backgroundColor": "#FFFFFF"
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Usamos Face ID para proteger o acesso ao seu cofre de senhas."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": false
+    }
+  }
+}

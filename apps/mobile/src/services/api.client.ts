@@ -6,7 +6,7 @@ const JWT_STORE_KEY = 'sf_access_token';
  * Base URL from Expo public env var.
  * Set EXPO_PUBLIC_API_URL in apps/mobile/.env (gitignored).
  */
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000';
+export const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000';
 
 export class ApiError extends Error {
   constructor(
@@ -51,6 +51,11 @@ class ApiClient {
   async hasToken(): Promise<boolean> {
     const token = await SecureStore.getItemAsync(JWT_STORE_KEY);
     return token !== null;
+  }
+
+  /** Returns the raw JWT — used by services that need to authenticate outside HTTP (e.g., WebSocket handshake). */
+  async getToken(): Promise<string | null> {
+    return SecureStore.getItemAsync(JWT_STORE_KEY);
   }
 
   // ─── HTTP methods ──────────────────────────────────────────────────────────

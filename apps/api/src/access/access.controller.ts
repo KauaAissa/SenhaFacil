@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, HttpStatus, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Post, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AccessService } from './access.service';
 import { RequestAccessDto } from './dto/request-access.dto';
@@ -39,5 +39,17 @@ export class AccessController {
   @HttpCode(HttpStatus.OK)
   respondToAccess(@Req() req: AuthRequest, @Body() dto: RespondAccessDto) {
     return this.accessService.respondToAccess(req.user.id, dto);
+  }
+
+  /**
+   * GET /access/pending
+   *
+   * Called by the caregiver's app to list outstanding access requests —
+   * a fallback in case the FCM push was missed, delayed, or the caregiver
+   * simply opens the app directly.
+   */
+  @Get('pending')
+  findPending(@Req() req: AuthRequest) {
+    return this.accessService.findPendingForCaregiver(req.user.id);
   }
 }

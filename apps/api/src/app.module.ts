@@ -7,6 +7,8 @@ import { AuthModule } from './auth/auth.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { AccessModule } from './access/access.module';
 import { VaultModule } from './vault/vault.module';
+import { ContactsModule } from './contacts/contacts.module';
+import { UsersModule } from './users/users.module';
 
 @Module({
   imports: [
@@ -18,6 +20,8 @@ import { VaultModule } from './vault/vault.module';
     NotificationsModule,
     AccessModule,
     VaultModule,
+    ContactsModule,
+    UsersModule,
   ],
 })
 export class AppModule {}
