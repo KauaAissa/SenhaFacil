@@ -1,5 +1,5 @@
-import { useCallback, useState } from 'react';
-import { View, Switch, ScrollView, Pressable, StyleSheet, Alert } from 'react-native';
+import { useCallback, useDeferredValue, useState } from 'react';
+import { View, ScrollView, Pressable, StyleSheet, Alert } from 'react-native';
 import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { generatePassword } from '@senha-facil/crypto';
 import { Screen } from '../../../components/ui/Screen';
@@ -8,6 +8,8 @@ import { AccessibleTextInput } from '../../../components/ui/AccessibleTextInput'
 import { AccessibleButton } from '../../../components/ui/AccessibleButton';
 import { vaultService } from '../../../services/vault.service';
 import { colors, spacing, touchTarget } from '../../../theme/theme';
+import { passwordAdvice } from '../../../services/password-advice.service';
+import { AccessibleSwitch } from '../../../components/ui/AccessibleSwitch';
 
 const CATEGORIES = [
   { value: 'BANKING', label: 'Banco' },
@@ -35,6 +37,8 @@ export default function NewVaultItemScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [ready, setReady] = useState(!id);
   const [isFavorite, setIsFavorite] = useState(false);
+  const deferredPassword = useDeferredValue(password);
+  const advice = passwordAdvice(deferredPassword, [label, login]);
 
   useFocusEffect(useCallback(() => {
     let active = true;
@@ -87,6 +91,7 @@ export default function NewVaultItemScreen() {
   return (
     <Screen>
       {!ready ? <AccessibleText variant="body">Preparando edicao...</AccessibleText> : <>
+      <AccessibleText variant="title" style={{ marginBottom: spacing.lg }}>{id ? 'Editar senha' : 'Adicionar senha'}</AccessibleText>
       <AccessibleTextInput label="Nome (ex: Banco do Brasil)" value={label} onChangeText={setLabel} />
 
       <AccessibleText variant="body" bold style={{ marginBottom: spacing.xs }}>
@@ -121,7 +126,10 @@ export default function NewVaultItemScreen() {
         autoCapitalize="none"
       />
       <AccessibleButton label="Gerar senha" icon="refresh-outline" variant="secondary" onPress={() => setPassword(generatePassword())} />
-      {password.length > 0 && password.length < 12 && <AccessibleText variant="body" color={colors.warning}>Prefira uma senha mais longa e diferente das suas outras senhas.</AccessibleText>}
+      {advice && <View style={{ marginVertical: spacing.md, gap: spacing.sm }}>
+        <AccessibleText bold color={advice.score < 3 ? colors.warning : colors.success}>Forca estimada: {advice.label}</AccessibleText>
+        <AccessibleText variant="caption">{advice.advice}</AccessibleText>
+      </View>}
       <AccessibleTextInput
         label="Site (opcional)"
         value={url}
@@ -132,15 +140,8 @@ export default function NewVaultItemScreen() {
       <AccessibleTextInput label="Observações (opcional)" value={notes} onChangeText={setNotes} multiline />
 
       <View style={styles.switchRow}>
-        <View style={{ flex: 1 }}>
-          <AccessibleText variant="body" bold>
-            Exigir aprovação de um familiar
-          </AccessibleText>
-          <AccessibleText variant="caption">
-            Um familiar de confiança precisará autorizar antes que esta senha seja exibida.
-          </AccessibleText>
-        </View>
-        <Switch accessibilityLabel="Exigir aprovacao de um familiar" value={requiresApproval} onValueChange={setRequiresApproval} />
+        <AccessibleSwitch label="Exigir aprovacao de um familiar" value={requiresApproval} onValueChange={setRequiresApproval}
+          disabled={submitting} description="Um familiar de confianca precisara autorizar antes que esta senha seja exibida." />
       </View>
 
       <AccessibleButton label="Salvar senha" icon="save-outline" onPress={handleSave} loading={submitting} />

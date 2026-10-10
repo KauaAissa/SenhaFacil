@@ -26,12 +26,12 @@ export default function OnboardingScreen() {
         <Ionicons name={step === 0 ? 'key-outline' : 'people-outline'} size={48} color={colors.primaryDark} accessible={false} />
         <AccessibleText variant="bodyLarge" bold>{step === 0 ? 'Sua senha mestra' : 'Acesso assistido'}</AccessibleText>
         <AccessibleText variant="body">{step === 0
-          ? 'Guarde sua senha mestra em um lugar seguro fora deste aparelho. Sem ela ou uma chave local ainda valida, o conteudo do cofre nao pode ser recuperado. O kit de recuperacao ainda nao esta disponivel.'
+          ? 'Guarde sua senha mestra e seu kit de recuperacao fora deste aparelho. Sem a senha, um kit valido ou uma chave local ainda disponivel, o conteudo do cofre nao pode ser recuperado.'
           : user?.role === 'CAREGIVER'
             ? 'Um convite precisa ser aceito antes de ajudar outra pessoa. A permissao para aprovar acessos e concedida pelo dono do cofre. Voce nao recebe as senhas dele.'
             : 'Um familiar vinculado pode aprovar ou negar pedidos por dois minutos, sem receber suas senhas. Sem conexao, o acesso de emergencia exige sua autenticacao e fica registrado no historico.'}</AccessibleText>
         <AccessibleText variant="body">{step === 0
-          ? 'Nomes e categorias de itens, perfil e historico nao sao cifrados no servidor. A senha de entrada tambem autentica sua conta na API.'
+          ? 'Nomes e categorias de itens, perfil e historico nao sao cifrados no servidor. Contas com kit usam uma credencial derivada, sem enviar a senha mestra para entrar.'
           : 'O cofre bloqueia ao sair do app ou apos dois minutos sem toque. Copiar uma senha a deixa na area de transferencia por ate 30 segundos; outros aplicativos e historicos do sistema podem manter copias.'}</AccessibleText>
       </View>
       {step === 0 ? <AccessibleButton label="Continuar" icon="arrow-forward-outline" onPress={() => setStep(1)} />

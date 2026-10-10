@@ -15,7 +15,10 @@ export default function CaregiverLayout() {
         headerTintColor: colors.primary,
       }}
     >
-      <Stack.Screen name="requests/index" options={{ title: 'Solicitações' }} />
+      <Stack.Screen name="requests/index" options={{ title: 'Solicitações', headerShown: false }} />
+      <Stack.Screen name="history" options={{ title: 'Historico de acessos' }} />
+      <Stack.Screen name="profile" options={{ title: 'Minha conta' }} />
+      <Stack.Screen name="security" options={{ title: 'Seguranca', headerShown: false }} />
     </Stack>
   );
 }

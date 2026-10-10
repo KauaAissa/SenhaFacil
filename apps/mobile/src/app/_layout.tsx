@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { View, ActivityIndicator, AppState } from 'react-native';
+import { View, ActivityIndicator, AppState, Platform } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
 import * as Notifications from 'expo-notifications';
 import { listenPushTokenChanges } from '../services/push-notifications.service';
@@ -13,6 +13,9 @@ import { AccessibleButton } from '../components/ui/AccessibleButton';
 import { useAccessibilityStore } from '../stores/accessibility.store';
 import OnboardingScreen from '../components/OnboardingScreen';
 import { usePreventScreenCapture } from 'expo-screen-capture';
+import { useFonts, AtkinsonHyperlegible_400Regular, AtkinsonHyperlegible_700Bold } from '@expo-google-fonts/atkinson-hyperlegible';
+import RecoveryKitGate from '../components/RecoveryKitGate';
+import { useReducedMotion } from 'react-native-reanimated';
 
 /**
  * Root layout — runs session bootstrap once and gates all routing on it.
@@ -20,7 +23,17 @@ import { usePreventScreenCapture } from 'expo-screen-capture';
  * (see useRequireRole) that redirects based on the resolved session.
  */
 export default function RootLayout() {
+  return <>{Platform.OS !== 'web' && <NativeScreenProtection />}<RootContent /></>;
+}
+
+function NativeScreenProtection() {
   usePreventScreenCapture('senha-facil');
+  return null;
+}
+
+function RootContent() {
+  const reducedMotion = useReducedMotion();
+  const [fontsLoaded, fontError] = useFonts({ AtkinsonHyperlegible_400Regular, AtkinsonHyperlegible_700Bold });
   const { bootstrap, isReady, user, isLocked, isLoading, error, unlock, lock, logout, needsOnboarding } = useAuthStore();
   const [password, setPassword] = useState('');
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -48,6 +61,7 @@ export default function RootLayout() {
       if (session.isLocked || session.user?.id !== user?.id) return;
       try {
         if (data.type === 'ACCESS_REQUEST' && user?.role === 'CAREGIVER') router.push('/(caregiver)/requests');
+        else if (data.type === 'EMERGENCY_ACCESS' && user?.role === 'CAREGIVER') router.push('/(caregiver)/history');
         else if (data.type === 'ACCESS_RESOLVED' && user?.role === 'ELDERLY') {
           const state = await accessApiService.state(data.accessLogId);
           const current = useAuthStore.getState();
@@ -82,7 +96,7 @@ export default function RootLayout() {
     await unlock(withPassword ? entered : undefined).catch(() => undefined);
   }
 
-  if (!isReady) {
+  if (!isReady || (!fontsLoaded && !fontError)) {
     return (
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background }}>
         <ActivityIndicator size="large" color={colors.primary} />
@@ -96,13 +110,17 @@ export default function RootLayout() {
         <AccessibleText variant="title">Cofre bloqueado</AccessibleText>
         <AccessibleText variant="body">{user.name}</AccessibleText>
         <AccessibleTextInput label="Senha mestra" value={password} onChangeText={setPassword} secureTextEntry />
-        {error && <AccessibleText variant="body" color={colors.danger} accessibilityLiveRegion="polite">{error}</AccessibleText>}
-        <AccessibleButton label="Desbloquear com senha" disabled={isLoading || !password} onPress={() => void handleUnlock(true)} />
-        <AccessibleButton label="Usar biometria" disabled={isLoading} onPress={() => void handleUnlock(false)} />
-        <AccessibleButton label="Sair desta conta" variant="danger" disabled={isLoading} onPress={() => { setPassword(''); void logout(); }} />
+        {Boolean(error) && <AccessibleText variant="body" color={colors.danger} accessibilityLiveRegion="polite">{error}</AccessibleText>}
+        <View style={{ gap: 16 }}>
+          <AccessibleButton label="Desbloquear com senha" icon="lock-open-outline" loading={isLoading} disabled={!password} onPress={() => void handleUnlock(true)} />
+          <AccessibleButton label="Usar biometria" icon="finger-print-outline" variant="secondary" disabled={isLoading} onPress={() => void handleUnlock(false)} />
+          <AccessibleButton label="Sair desta conta" icon="log-out-outline" variant="secondary" disabled={isLoading} onPress={() => { setPassword(''); void logout(); }} />
+        </View>
       </Screen>
     );
   }
 
-  return <View style={{ flex: 1 }} onTouchStart={resetTimer}>{user && needsOnboarding ? <OnboardingScreen /> : <Stack screenOptions={{ headerShown: false }} />}</View>;
+  const content = user && needsOnboarding ? <OnboardingScreen /> : <Stack screenOptions={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />;
+  return <View style={{ flex: 1 }} onTouchStart={resetTimer}>{user ? <RecoveryKitGate key={user.id} email={user.email}
+    recoverySalt={useAuthStore.getState().getRecoverySalt()}>{content}</RecoveryKitGate> : content}</View>;
 }

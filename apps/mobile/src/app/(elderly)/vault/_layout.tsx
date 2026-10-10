@@ -10,7 +10,7 @@ export default function VaultStackLayout() {
         headerTintColor: colors.primary,
       }}
     >
-      <Stack.Screen name="index" options={{ title: 'Meu Cofre' }} />
+      <Stack.Screen name="index" options={{ title: 'Meu Cofre', headerShown: false }} />
       <Stack.Screen name="new" options={{ title: 'Nova Senha' }} />
       <Stack.Screen name="[id]" options={{ title: 'Detalhes' }} />
       <Stack.Screen name="edit" options={{ title: 'Editar senha' }} />

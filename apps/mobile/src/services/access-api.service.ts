@@ -1,10 +1,10 @@
 import { apiClient } from './api.client';
 
-export type AccessStatus = 'PENDING' | 'APPROVED' | 'DENIED' | 'EXPIRED' | 'FALLBACK_GRANTED';
+export type AccessStatus = 'PENDING' | 'APPROVED' | 'DENIED' | 'EXPIRED' | 'FALLBACK_GRANTED' | 'CANCELLED';
 
-export function parseAccessNotification(data: Record<string, unknown>): { accessLogId: string; type: 'ACCESS_REQUEST' | 'ACCESS_RESOLVED' } | null {
+export function parseAccessNotification(data: Record<string, unknown>): { accessLogId: string; type: 'ACCESS_REQUEST' | 'ACCESS_RESOLVED' | 'EMERGENCY_ACCESS' } | null {
   if (typeof data.accessLogId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(data.accessLogId)) return null;
-  if (data.type !== 'ACCESS_REQUEST' && data.type !== 'ACCESS_RESOLVED') return null;
+  if (data.type !== 'ACCESS_REQUEST' && data.type !== 'ACCESS_RESOLVED' && data.type !== 'EMERGENCY_ACCESS') return null;
   return { accessLogId: data.accessLogId, type: data.type };
 }
 
@@ -54,6 +54,12 @@ class AccessApiService {
   }
 
   history(): Promise<AccessHistoryEntry[]> { return apiClient.get('/access/history'); }
+
+  historyPage(cursor?: string): Promise<{ items: AccessHistoryEntry[]; nextCursor: string | null }> {
+    return apiClient.get(`/access/history/page${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`);
+  }
+
+  cancel(id: string): Promise<{ status: 'CANCELLED' }> { return apiClient.post(`/access/${id}/cancel`, {}); }
 
   state(id: string): Promise<{ id: string; vaultItemId: string; status: AccessStatus; expiresAt: string; notes: string | null }> {
     return apiClient.get(`/access/${id}`);

@@ -1,7 +1,11 @@
-import { IsString, Matches } from 'class-validator';
+import { IsString, Matches, IsOptional, IsUUID } from 'class-validator';
 
 export class RefreshTokenDto {
   @IsString()
   @Matches(/^[A-Za-z0-9_-]{43}$/)
   refreshToken: string;
+
+  @IsOptional()
+  @IsUUID('4')
+  requestId?: string;
 }

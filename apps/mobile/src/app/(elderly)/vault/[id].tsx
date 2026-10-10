@@ -22,6 +22,7 @@ type GateState =
   | 'waiting'
   | 'denied'
   | 'expired'
+  | 'cancelled'
   | 'offline-fallback'
   | 'revealed'
   | 'not-found';
@@ -103,8 +104,8 @@ export default function VaultItemDetailScreen() {
         if (state.status === 'APPROVED') {
           const value = await vaultService.revealItem(id, requestId);
           if (alive.current && focusGeneration.current === generation) { setRevealed(value); setGate('revealed'); }
-        } else if (state.status === 'DENIED' || state.status === 'EXPIRED') {
-          setRevealed(null); setGate(state.status === 'DENIED' ? 'denied' : 'expired');
+        } else if (state.status === 'DENIED' || state.status === 'EXPIRED' || state.status === 'CANCELLED') {
+          setRevealed(null); setGate(state.status === 'CANCELLED' ? 'cancelled' : state.status === 'DENIED' ? 'denied' : 'expired');
           void sensitiveClipboard.clear().catch(() => undefined);
         }
       } catch {}
@@ -186,6 +187,18 @@ export default function VaultItemDetailScreen() {
     );
   }
 
+  async function cancelRequest() {
+    const requestId = accessLogIdRef.current;
+    const generation = focusGeneration.current;
+    if (!requestId) return;
+    try {
+      await accessApiService.cancel(requestId);
+      if (alive.current && generation === focusGeneration.current) {
+        accessLogIdRef.current = null; setRevealed(null); setExpiresAt(null); setGate('cancelled');
+      }
+    } catch { Alert.alert('Cancelamento nao concluido', 'O pedido pode ter sido respondido. Confira o estado antes de tentar novamente.'); }
+  }
+
   async function handleDelete() {
     if (!item) return;
     Alert.alert('Excluir senha', `Tem certeza que deseja excluir "${item.label}"?`, [
@@ -235,7 +248,7 @@ export default function VaultItemDetailScreen() {
       {gate === 'locked' && (
         <AccessibleCard highlight>
           <AccessibleText variant="body" bold>
-            🔒 Esta senha requer aprovação
+            Esta senha requer aprovação
           </AccessibleText>
           <AccessibleText variant="body" style={{ marginVertical: spacing.sm }}>
             Um familiar de confiança precisa autorizar antes que você veja esta senha.
@@ -253,13 +266,14 @@ export default function VaultItemDetailScreen() {
       {gate === 'waiting' && (
         <AccessibleCard>
           <AccessibleText variant="body" bold>
-            ⏳ Aguardando resposta do familiar...
+            Aguardando resposta do familiar
           </AccessibleText>
           {expiresAt && (
             <AccessibleText variant="caption" style={{ marginTop: spacing.xs }}>
               Expira às {expiresAt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
             </AccessibleText>
           )}
+          <View style={{ marginTop: spacing.md }}><AccessibleButton label="Cancelar pedido" icon="close-outline" variant="secondary" onPress={() => void cancelRequest()} /></View>
         </AccessibleCard>
       )}
 
@@ -268,17 +282,17 @@ export default function VaultItemDetailScreen() {
           <AccessibleText variant="body" bold color={colors.danger}>
             O familiar negou este acesso.
           </AccessibleText>
-          {notes && <AccessibleText variant="body">{notes}</AccessibleText>}
+          {Boolean(notes) && <AccessibleText variant="body">{notes}</AccessibleText>}
           <View style={{ marginTop: spacing.md }}>
             <AccessibleButton label="Tentar novamente" onPress={() => setGate('locked')} />
           </View>
         </AccessibleCard>
       )}
 
-      {gate === 'expired' && (
+      {(gate === 'expired' || gate === 'cancelled') && (
         <AccessibleCard>
           <AccessibleText variant="body" bold color={colors.warning}>
-            A solicitação expirou sem resposta.
+            {gate === 'cancelled' ? 'Pedido cancelado.' : 'A solicitação expirou sem resposta.'}
           </AccessibleText>
           <View style={{ marginTop: spacing.md }}>
             <AccessibleButton label="Solicitar novamente" onPress={() => setGate('locked')} />
@@ -305,7 +319,7 @@ export default function VaultItemDetailScreen() {
           {usedFallback && (
             <AccessibleCard highlight>
               <AccessibleText variant="caption" color={colors.warning} bold>
-                ⚠ Revelado em modo de emergência (offline)
+                Revelado em modo de emergência (offline)
               </AccessibleText>
             </AccessibleCard>
           )}

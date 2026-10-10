@@ -25,5 +25,10 @@
     "turbo": "^2.0.0",
     "typescript": "^5.4.0",
     "typescript-eslint": "^8"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "@noble/hashes@1.8.0": "patches/@noble__hashes@1.8.0.patch"
+    }
   }
 }

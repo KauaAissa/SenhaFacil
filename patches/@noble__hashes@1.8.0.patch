@@ -1,0 +1,81 @@
+diff --git a/esm/utils.js b/esm/utils.js
+index 9614c8e5754cc1e94e26a81e9517f20499696b4e..76b24396ce8518088dcf9f67246a61cc2a97c18f 100644
+--- a/esm/utils.js
++++ b/esm/utils.js
+@@ -158,12 +158,7 @@ export function hexToBytes(hex) {
+     }
+     return array;
+ }
+-/**
+- * There is no setImmediate in browser and setTimeout is slow.
+- * Call of async fn will return Promise, which will be fullfiled only on
+- * next scheduler queue processing step and this is exactly what we need.
+- */
+-export const nextTick = async () => { };
++export const nextTick = () => new Promise((resolve) => setTimeout(resolve, 0));
+ /** Returns control to thread each 'tick' ms to avoid blocking. */
+ export async function asyncLoop(iters, tick, cb) {
+     let ts = Date.now();
+@@ -174,7 +169,7 @@ export async function asyncLoop(iters, tick, cb) {
+         if (diff >= 0 && diff < tick)
+             continue;
+         await nextTick();
+-        ts += diff;
++        ts = Date.now();
+     }
+ }
+ /**
+diff --git a/src/utils.ts b/src/utils.ts
+index 4c8a67985ada92bdbce46460c95e6a697c432f58..1dcdb42d6dfdc77bfda0d57bd5264ca85b4d1a84 100644
+--- a/src/utils.ts
++++ b/src/utils.ts
+@@ -180,12 +180,7 @@ export function hexToBytes(hex: string): Uint8Array {
+   return array;
+ }
+ 
+-/**
+- * There is no setImmediate in browser and setTimeout is slow.
+- * Call of async fn will return Promise, which will be fullfiled only on
+- * next scheduler queue processing step and this is exactly what we need.
+- */
+-export const nextTick = async (): Promise<void> => {};
++export const nextTick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+ 
+ /** Returns control to thread each 'tick' ms to avoid blocking. */
+ export async function asyncLoop(
+@@ -200,7 +195,7 @@ export async function asyncLoop(
+     const diff = Date.now() - ts;
+     if (diff >= 0 && diff < tick) continue;
+     await nextTick();
+-    ts += diff;
++    ts = Date.now();
+   }
+ }
+ 
+diff --git a/utils.js b/utils.js
+index aed9199852dc91ae3a1a149a64fe806bf697a3ab..cf421b4f8ce99d6c663435246399746f7c33b47a 100644
+--- a/utils.js
++++ b/utils.js
+@@ -188,12 +188,7 @@ function hexToBytes(hex) {
+     }
+     return array;
+ }
+-/**
+- * There is no setImmediate in browser and setTimeout is slow.
+- * Call of async fn will return Promise, which will be fullfiled only on
+- * next scheduler queue processing step and this is exactly what we need.
+- */
+-const nextTick = async () => { };
++const nextTick = () => new Promise((resolve) => setTimeout(resolve, 0));
+ exports.nextTick = nextTick;
+ /** Returns control to thread each 'tick' ms to avoid blocking. */
+ async function asyncLoop(iters, tick, cb) {
+@@ -205,7 +200,7 @@ async function asyncLoop(iters, tick, cb) {
+         if (diff >= 0 && diff < tick)
+             continue;
+         await (0, exports.nextTick)();
+-        ts += diff;
++        ts = Date.now();
+     }
+ }
+ /**

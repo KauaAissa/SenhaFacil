@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Alert, Switch, View } from 'react-native';
+import { Alert, View } from 'react-native';
 import { Screen } from './ui/Screen';
 import { AccessibleText } from './ui/AccessibleText';
 import { AccessibleTextInput } from './ui/AccessibleTextInput';
@@ -7,8 +7,11 @@ import { AccessibleButton } from './ui/AccessibleButton';
 import { useAuthStore } from '../stores/auth.store';
 import { spacing } from '../theme/theme';
 import { textScales, useAccessibilityStore } from '../stores/accessibility.store';
+import { useRouter } from 'expo-router';
+import { AccessibleSwitch } from './ui/AccessibleSwitch';
 
 export default function ProfileScreen() {
+  const router = useRouter();
   const { user, updateProfile, deleteAccount, logout, lock, isLoading } = useAuthStore();
   const { textScale, highContrast, setTextScale, setHighContrast } = useAccessibilityStore();
   const [name, setName] = useState(user?.name ?? '');
@@ -57,11 +60,8 @@ export default function ProfileScreen() {
       <AccessibleButton label="Salvar perfil" icon="save-outline" onPress={save} loading={saving} />
       <View style={{ gap: spacing.md, marginVertical: spacing.lg }}>
         <AccessibleText variant="bodyLarge" bold>Legibilidade</AccessibleText>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
-          <AccessibleText variant="body" style={{ flex: 1 }}>Contraste reforcado</AccessibleText>
-          <Switch value={highContrast} accessibilityLabel="Contraste reforcado"
-            onValueChange={(enabled) => { void setHighContrast(enabled).catch(() => Alert.alert('Preferencia nao salva.')); }} />
-        </View>
+        <AccessibleSwitch label="Contraste reforcado" value={highContrast}
+          onValueChange={(enabled) => { void setHighContrast(enabled).catch(() => Alert.alert('Preferencia nao salva.')); }} />
         <AccessibleText variant="body">Tamanho do texto: {Math.round(textScale * 100)}%</AccessibleText>
         <AccessibleButton label="Aumentar texto" icon="add-outline" disabled={textScale === 1.4}
           onPress={() => { void setTextScale(textScales[Math.min(textScales.indexOf(textScale) + 1, 2)]).catch(() => Alert.alert('Preferencia nao salva.')); }} />
@@ -69,12 +69,14 @@ export default function ProfileScreen() {
           onPress={() => { void setTextScale(textScales[Math.max(textScales.indexOf(textScale) - 1, 0)]).catch(() => Alert.alert('Preferencia nao salva.')); }} />
       </View>
       <View style={{ gap: spacing.md, marginVertical: spacing.lg }}>
+        <AccessibleButton label="Senha mestra e recuperacao" icon="shield-checkmark-outline" variant="secondary"
+          onPress={() => router.push(user?.role === 'CAREGIVER' ? '/(caregiver)/security' : '/(elderly)/security')} />
         <AccessibleButton label="Bloquear cofre" icon="lock-closed-outline" variant="secondary" onPress={lock} />
         <AccessibleButton label="Sair da conta" icon="log-out-outline" variant="secondary" onPress={() => void logout()} disabled={isLoading} />
       </View>
       <AccessibleText variant="body">Privacidade</AccessibleText>
       <AccessibleText variant="body">O conteudo do cofre e cifrado no aparelho. Nomes e categorias dos itens, perfil e historico ficam no servidor. Familiares autorizados veem solicitacoes e historico, nao suas senhas.</AccessibleText>
-      <AccessibleText variant="body">A senha de entrada tambem autentica sua conta na API. A exclusao remove os dados ativos; copias de backup do servidor dependem da politica do ambiente de hospedagem.</AccessibleText>
+      <AccessibleText variant="body">Contas com kit de recuperacao usam uma credencial derivada para entrar na API, sem enviar a senha mestra. Contas antigas precisam preparar o kit para migrar. A exclusao remove os dados ativos; backups dependem da politica de hospedagem.</AccessibleText>
       <AccessibleText variant="body">O historico resolvido tem retencao de 365 dias, com limpeza diaria. A exclusao limpa este aparelho; copias offline em outros aparelhos precisam ser apagadas neles.</AccessibleText>
       <AccessibleTextInput label="Digite EXCLUIR" value={confirmation} onChangeText={setConfirmation} autoCapitalize="characters" />
       <AccessibleTextInput label="Senha de entrada" value={password} onChangeText={setPassword} secureTextEntry />

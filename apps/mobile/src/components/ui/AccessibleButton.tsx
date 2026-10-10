@@ -4,6 +4,9 @@ import type { ComponentProps } from 'react';
 import { AccessibleText } from './AccessibleText';
 import { colors, spacing, touchTarget } from '../../theme/theme';
 import { useAccessibilityStore } from '../../stores/accessibility.store';
+import Animated, { ReduceMotion, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 type Variant = 'primary' | 'secondary' | 'danger';
 
@@ -36,32 +39,36 @@ export function AccessibleButton({
 }: AccessibleButtonProps) {
   const isDisabled = disabled || loading;
   const highContrast = useAccessibilityStore((state) => state.highContrast);
+  const scale = useSharedValue(1);
+  const motion = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
 
   return (
-    <Pressable
+    <AnimatedPressable
       onPress={onPress}
+      onPressIn={() => { scale.value = withTiming(0.98, { duration: 100, reduceMotion: ReduceMotion.System }); }}
+      onPressOut={() => { scale.value = withTiming(1, { duration: 140, reduceMotion: ReduceMotion.System }); }}
       disabled={isDisabled}
       accessibilityRole="button"
       accessibilityLabel={label}
       accessibilityHint={accessibilityHint}
       accessibilityState={{ disabled: isDisabled, busy: loading }}
-      style={({ pressed }) => [
+      style={[
         styles.base,
+        motion,
         styles[variant],
         highContrast && { backgroundColor: '#000000' },
         isDisabled && styles.disabled,
-        pressed && !isDisabled && styles.pressed,
       ]}
     >
       {loading ? (
         <ActivityIndicator color="#FFFFFF" />
       ) : (
         <>
-          {icon && <Ionicons name={icon} size={24} color="#FFFFFF" accessible={false} />}
-          <AccessibleText variant="bodyLarge" bold color="#FFFFFF" style={{ flexShrink: 1, textAlign: 'center' }}>{label}</AccessibleText>
+          {icon && <Ionicons name={icon} size={24} color={variant === 'secondary' && !highContrast && !isDisabled ? colors.accent : '#FFFFFF'} accessible={false} />}
+          <AccessibleText variant="bodyLarge" bold color={variant === 'secondary' && !highContrast && !isDisabled ? colors.textPrimary : '#FFFFFF'} style={{ flexShrink: 1, textAlign: 'center' }}>{label}</AccessibleText>
         </>
       )}
-    </Pressable>
+    </AnimatedPressable>
   );
 }
 
@@ -77,8 +84,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   primary: { backgroundColor: colors.primary },
-  secondary: { backgroundColor: colors.textSecondary },
+  secondary: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.textSecondary },
   danger: { backgroundColor: colors.danger },
   disabled: { backgroundColor: colors.disabled },
-  pressed: { opacity: 0.85 },
 });

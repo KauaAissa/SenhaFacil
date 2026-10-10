@@ -8,16 +8,22 @@ import { NotificationsService } from '../src/notifications/notifications.service
 import { AccessGateway } from '../src/access/access.gateway';
 import { VaultCategoryDto } from '../src/vault/dto/create-vault-item.dto';
 import { AccessDecision } from '../src/access/dto/respond-access.dto';
+import { AuthService } from '../src/auth/auth.service';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
+import { ContactsService } from '../src/contacts/contacts.service';
 
 const databaseTests = process.env.INTEGRATION_TESTS === '1' ? describe : describe.skip;
 
 databaseTests('PostgreSQL transaction and cascade integration', () => {
   const prisma = new PrismaService();
   const vault = new VaultService(prisma);
-  const notifications = { sendAccessRequest: jest.fn(), sendAccessResolved: jest.fn() };
+  const notifications = { sendAccessRequest: jest.fn(), sendAccessResolved: jest.fn(), sendEmergency: jest.fn() };
   const gateway = { notifyAccessResolved: jest.fn() };
   const access = new AccessService(prisma, notifications as unknown as NotificationsService, gateway as unknown as AccessGateway);
   const users = new UsersService(prisma);
+  const auth = new AuthService(prisma, new JwtService({ secret: 'integration-only-secret' }),
+    { getOrThrow: () => 'integration-only-secret' } as unknown as ConfigService);
   const ids: string[] = [];
   let owner: string;
   let another: string;
@@ -87,5 +93,71 @@ databaseTests('PostgreSQL transaction and cascade integration', () => {
     expect(await prisma.accessLog.count({ where: { requesterId: owner } })).toBe(0);
     expect(await prisma.authSession.count({ where: { userId: owner } })).toBe(0);
     expect(await prisma.vaultSyncOperation.count({ where: { userId: owner } })).toBe(0);
+  });
+
+  test('v2 recovery preserves ciphertext, invalidates the previous kit and revokes sessions', async () => {
+    const email = `${randomUUID()}@example.invalid`;
+    const protection = { salt: randomBytes(16).toString('hex'), recoverySalt: randomBytes(16).toString('hex'),
+      passwordEnvelope: { ciphertext: randomBytes(100).toString('base64'), iv: randomBytes(12).toString('base64') },
+      recoveryEnvelope: { ciphertext: randomBytes(100).toString('base64'), iv: randomBytes(12).toString('base64') } };
+    const credential = 'aa'.repeat(32); const recoveryCredential = 'bb'.repeat(32);
+    const registered = await auth.register({ name: 'Recovery fixture', email, password: credential, authVersion: 2,
+      kdfSalt: protection.salt, protection, recoveryCredential });
+    ids.push(registered.user.id);
+    const item = operation(); await vault.sync(registered.user.id, { items: [item] });
+    await expect(auth.login({ email, password, authVersion: 2 })).rejects.toThrow();
+    await expect(auth.recoveryInfo({ email, recoveryCredential: '00'.repeat(32) })).rejects.toThrow();
+    const next = { ...protection, salt: randomBytes(16).toString('hex'), recoverySalt: randomBytes(16).toString('hex') };
+    await auth.recover({ email, recoveryCredential, credential: 'cc'.repeat(32), newRecoveryCredential: 'dd'.repeat(32),
+      securityVersion: 1, protection: next });
+    expect((await prisma.vaultItem.findFirstOrThrow({ where: { userId: registered.user.id } })).encryptedPayload).toBe(item.encryptedPayload);
+    expect(await prisma.authSession.count({ where: { userId: registered.user.id, revokedAt: null } })).toBe(0);
+    await expect(auth.recoveryInfo({ email, recoveryCredential })).rejects.toThrow();
+    expect((await auth.login({ email, password: 'cc'.repeat(32), authVersion: 2 })).user.securityVersion).toBe(2);
+  }, 30_000);
+
+  test('same refresh operation can recover a lost response, but another operation and revoked session cannot', async () => {
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: another } });
+    const logged = await auth.login({ email: user.email, password });
+    const requestId = randomUUID();
+    const first = await auth.refresh(logged.refreshToken, requestId);
+    expect((await auth.refresh(logged.refreshToken, requestId)).refreshToken).toBe(first.refreshToken);
+    await expect(auth.refresh(logged.refreshToken, randomUUID())).rejects.toThrow();
+    await auth.logout(first.refreshToken);
+    await expect(auth.refresh(logged.refreshToken, requestId)).rejects.toThrow();
+  });
+
+  test('cancel and approve races have one winner; emergency retries notify once; history pages do not overlap', async () => {
+    const activeCaregiver = await prisma.user.findFirstOrThrow({ where: { id: { in: caregivers } } });
+    await prisma.trustedContact.upsert({ where: { elderlyId_caregiverId: { elderlyId: another, caregiverId: activeCaregiver.id } },
+      update: { status: 'ACTIVE', permissions: ['APPROVE_ACCESS'] }, create: { elderlyId: another, caregiverId: activeCaregiver.id, status: 'ACTIVE', permissions: ['APPROVE_ACCESS'] } });
+    const receipt = await vault.sync(another, { items: [{ ...operation(), requiresApproval: true }] });
+    const itemId = receipt.results[0].serverId;
+    const requested = await access.requestAccess(another, { vaultItemId: itemId });
+    await expect(access.cancel(activeCaregiver.id, requested.accessLogId)).rejects.toThrow();
+    const results = await Promise.allSettled([access.cancel(another, requested.accessLogId), access.respondToAccess(activeCaregiver.id,
+      { accessLogId: requested.accessLogId, decision: AccessDecision.APPROVED })]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    const event = { vaultItemId: itemId, eventId: randomUUID(), occurredAt: new Date().toISOString() };
+    await access.recordEmergency(another, event); await access.recordEmergency(another, event);
+    expect(notifications.sendEmergency).toHaveBeenCalledTimes(1);
+    for (let index = 0; index < 31; index++) await prisma.accessLog.create({ data: { vaultItemId: itemId, requesterId: another,
+      status: 'EXPIRED', expiresAt: new Date() } });
+    const first = await access.historyPage(another); const second = await access.historyPage(another, first.nextCursor!);
+    expect(first.items).toHaveLength(30);
+    expect(second.items.every((entry) => !first.items.some((previous) => previous.id === entry.id))).toBe(true);
+  });
+
+  test('simultaneous reinvitations cannot reset a relationship twice', async () => {
+    const caregiver = await prisma.user.findFirstOrThrow({ where: { id: { in: caregivers } } });
+    await prisma.trustedContact.updateMany({ where: { elderlyId: another, caregiverId: caregiver.id }, data: { status: 'REVOKED' } });
+    const contacts = new ContactsService(prisma);
+    const results = await Promise.allSettled([contacts.invite(another, { caregiverEmail: caregiver.email }), contacts.invite(another, { caregiverEmail: caregiver.email })]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    const contact = await prisma.trustedContact.findUniqueOrThrow({ where: { elderlyId_caregiverId: { elderlyId: another, caregiverId: caregiver.id } } });
+    const accepts = await Promise.allSettled([contacts.accept(caregiver.id, contact.id), contacts.accept(caregiver.id, contact.id)]);
+    expect(accepts.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    const rejected = accepts.find((result) => result.status === 'rejected') as PromiseRejectedResult;
+    expect([400, 409]).toContain(rejected.reason.getStatus());
   });
 });

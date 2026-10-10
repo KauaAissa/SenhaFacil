@@ -1,4 +1,5 @@
-export { deriveKey, generateSalt } from './kdf';
+export { deriveKey, generateSalt, configureKeyDerivation } from './kdf';
+export type { KeyDerivationProvider } from './kdf';
 export { encryptVaultItem, decryptVaultItem } from './vault';
 export { configureRandomSource } from './random';
 export { generatePassword } from './password';
@@ -6,3 +7,5 @@ export { importVaultKey, exportVaultKey, destroyVaultKey } from './key';
 export { encodeBase64, decodeBase64 } from './encoding';
 export type { VaultKey } from './key';
 export type { EncryptedPayload, VaultItemPlaintext } from './types';
+export { createProtection, openProtection, recoverProtection, changeProtection, deriveAuthentication, recoveryAuthentication } from './protection';
+export type { VaultProtection } from './protection';

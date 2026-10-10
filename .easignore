@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.expo/
+.turbo/
+*.env
+*.env.local
+.env.*
+!.env.example
+.DS_Store
+docs/
+*.docx
+coverage/
+credentials.json
+*.jks
+*.keystore
+*.p12
+*.mobileprovision

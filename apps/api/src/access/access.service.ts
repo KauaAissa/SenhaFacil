@@ -247,7 +247,7 @@ export class AccessService {
     return { ...log, status: log.expiresAt <= new Date() && log.status === 'PENDING' ? 'EXPIRED' : log.status };
   }
 
-  async history(userId: string) {
+  async history(userId: string, cursor?: string, take = 100) {
     return this.prisma.accessLog.findMany({
       where: { OR: [{ requesterId: userId }, { requester: { elderlyRelations: { some: {
         caregiverId: userId, status: 'ACTIVE', permissions: { has: 'APPROVE_ACCESS' },
@@ -255,8 +255,21 @@ export class AccessService {
       select: { id: true, status: true, requestedAt: true, resolvedAt: true, expiresAt: true, fallbackUsed: true, notes: true,
         requester: { select: { id: true, name: true } }, approver: { select: { name: true } },
         vaultItem: { select: { id: true, label: true, category: true } } },
-      orderBy: { requestedAt: 'desc' }, take: 100,
+      orderBy: [{ requestedAt: 'desc' }, { id: 'desc' }], take,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     });
+  }
+
+  async historyPage(userId: string, cursor?: string) {
+    const results = await this.history(userId, cursor, 31);
+    return { items: results.slice(0, 30), nextCursor: results.length > 30 ? results[29].id : null };
+  }
+
+  async cancel(userId: string, id: string) {
+    const result = await this.prisma.accessLog.updateMany({ where: { id, requesterId: userId, status: 'PENDING' },
+      data: { status: 'CANCELLED', resolvedAt: new Date() } });
+    if (result.count !== 1) throw new BadRequestException('Pedido encerrado ou indisponivel para cancelamento.');
+    return { status: 'CANCELLED' as const };
   }
 
   async recordEmergency(userId: string, dto: EmergencyAccessDto) {
@@ -267,9 +280,20 @@ export class AccessService {
     const item = await this.prisma.vaultItem.findFirst({ where: { id: itemId, userId } });
     if (!item) throw new NotFoundException('Senha ainda nao sincronizada.');
     const id = `emergency_${createHash('sha256').update(`${userId}:${dto.eventId}`).digest('hex')}`;
-    return this.prisma.accessLog.upsert({ where: { id }, update: {},
-      create: { id, vaultItemId: itemId, requesterId: userId, status: 'FALLBACK_GRANTED', fallbackUsed: true,
-        requestedAt: occurredAt, resolvedAt: occurredAt, expiresAt: occurredAt, deviceInfo: 'offline_client_report' },
-      select: { id: true, status: true } });
+    const { result, created } = await this.prisma.serializable(async (transaction) => {
+      const existing = await transaction.accessLog.findUnique({ where: { id }, select: { id: true, status: true } });
+      if (existing) return { result: existing, created: false };
+      const result = await transaction.accessLog.create({
+        data: { id, vaultItemId: itemId, requesterId: userId, status: 'FALLBACK_GRANTED', fallbackUsed: true,
+          requestedAt: occurredAt, resolvedAt: occurredAt, expiresAt: occurredAt, deviceInfo: 'offline_client_report' },
+        select: { id: true, status: true } });
+      return { result, created: true };
+    });
+    if (created) {
+      const contacts = await this.prisma.trustedContact.findMany({ where: { elderlyId: userId, status: 'ACTIVE',
+        permissions: { has: 'APPROVE_ACCESS' }, caregiver: { isActive: true } }, select: { caregiverId: true } });
+      await Promise.allSettled(contacts.map((contact) => this.notifications.sendEmergency({ userId: contact.caregiverId, accessLogId: id })));
+    }
+    return result;
   }
 }

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post, Req, UseGuards, Param, ForbiddenException } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Post, Req, UseGuards, Param, Query, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AccessService } from './access.service';
 import { RequestAccessDto } from './dto/request-access.dto';
@@ -59,6 +59,18 @@ export class AccessController {
 
   @Get('history')
   history(@Req() req: AuthRequest) { return this.accessService.history(req.user.id); }
+
+  @Get('history/page')
+  historyPage(@Req() req: AuthRequest, @Query('cursor') cursor?: string) {
+    if (cursor && !/^[A-Za-z0-9_-]{1,100}$/.test(cursor)) throw new BadRequestException('Pagina invalida.');
+    return this.accessService.historyPage(req.user.id, cursor);
+  }
+
+  @Post(':id/cancel')
+  cancel(@Req() req: AuthRequest, @Param('id') id: string) {
+    if (req.user.role !== 'ELDERLY') throw new ForbiddenException();
+    return this.accessService.cancel(req.user.id, id);
+  }
 
   @Post('emergency')
   emergency(@Req() req: AuthRequest, @Body() dto: EmergencyAccessDto) {

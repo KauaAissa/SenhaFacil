@@ -1,5 +1,5 @@
 import { Text, type TextProps, StyleSheet } from 'react-native';
-import { colors, fontSizes } from '../../theme/theme';
+import { colors, fonts, fontSizes } from '../../theme/theme';
 import { useAccessibilityStore } from '../../stores/accessibility.store';
 
 type Variant = 'title' | 'titleLarge' | 'body' | 'bodyLarge' | 'caption';
@@ -31,6 +31,7 @@ export function AccessibleText({
       style={[
         styles[variant],
         { fontSize: fontSizes[variant] * textScale, lineHeight: fontSizes[variant] * textScale * 1.4,
+          fontFamily: bold || variant.startsWith('title') ? fonts.bold : fonts.regular, letterSpacing: 0,
           color: highContrast && textColor.toUpperCase() !== '#FFFFFF' ? '#000000' : textColor },
         bold && styles.bold,
         style,

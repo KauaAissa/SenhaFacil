@@ -95,7 +95,7 @@ export default function ContactsScreen() {
           keyboardType="email-address"
         />
         <AccessibleButton label="Convidar familiar" onPress={handleInvite} loading={inviting} />
-        {error && <AccessibleText variant="body" color={colors.danger} accessibilityLiveRegion="polite">{error}</AccessibleText>}
+        {Boolean(error) && <AccessibleText variant="body" color={colors.danger} accessibilityLiveRegion="polite">{error}</AccessibleText>}
       </View>
 
       <FlatList

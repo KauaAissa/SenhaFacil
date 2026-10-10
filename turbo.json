@@ -17,8 +17,9 @@
       "dependsOn": ["^typecheck"]
     },
     "test": {
+      "cache": false,
       "dependsOn": ["^build"],
-      "env": ["DATABASE_URL"]
+      "env": ["DATABASE_URL", "INTEGRATION_TESTS", "HTTP_TESTS", "HTTP_API_URL"]
     },
     "db:generate": {
       "cache": false

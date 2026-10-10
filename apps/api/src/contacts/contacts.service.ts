@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { Prisma } from '@prisma/client';
 import type { InviteContactDto } from './dto/invite-contact.dto';
 import type { UpdatePermissionsDto } from './dto/update-permissions.dto';
 
@@ -31,8 +32,9 @@ export class ContactsService {
    * flow — no email delivery/registration link in this iteration).
    */
   async invite(elderlyId: string, dto: InviteContactDto) {
-    const caregiver = await this.prisma.user.findUnique({
-      where: { email: dto.caregiverEmail.trim().toLowerCase() },
+    return this.prisma.serializable(async (transaction) => {
+    const caregiver = await transaction.user.findFirst({
+      where: { email: { equals: dto.caregiverEmail.trim().toLowerCase(), mode: 'insensitive' } },
       select: { id: true, role: true, isActive: true },
     });
 
@@ -48,7 +50,7 @@ export class ContactsService {
       throw new BadRequestException('Invited user must have the CAREGIVER role');
     }
 
-    const existing = await this.prisma.trustedContact.findUnique({
+    const existing = await transaction.trustedContact.findUnique({
       where: { elderlyId_caregiverId: { elderlyId, caregiverId: caregiver.id } },
       select: { id: true, status: true },
     });
@@ -59,12 +61,12 @@ export class ContactsService {
 
     // Re-inviting after a REVOKED relation reuses the row instead of duplicating it
     const contact = existing
-      ? await this.prisma.trustedContact.update({
-          where: { id: existing.id },
+        ? await transaction.trustedContact.update({
+          where: { id: existing.id, status: 'REVOKED' },
           data: { status: 'PENDING', permissions: ['VIEW_ITEMS'] },
           select: CONTACT_SELECT,
         })
-      : await this.prisma.trustedContact.create({
+      : await transaction.trustedContact.create({
           data: {
             elderlyId,
             caregiverId: caregiver.id,
@@ -75,6 +77,7 @@ export class ContactsService {
         });
 
     return contact;
+    }).catch(rejectChangedContact);
   }
 
   // ─── POST /contacts/:id/accept ──────────────────────────────────────────────
@@ -98,7 +101,7 @@ export class ContactsService {
       where: { id: contactId, caregiverId, status: 'PENDING' },
       data: { status: 'ACTIVE' },
       select: CONTACT_SELECT,
-    });
+    }).catch(rejectChangedContact);
   }
 
   // ─── POST /contacts/:id/revoke ──────────────────────────────────────────────
@@ -124,10 +127,10 @@ export class ContactsService {
     }
 
     return this.prisma.trustedContact.update({
-      where: { id: contactId },
+      where: { id: contactId, status: contact.status, OR: [{ elderlyId: userId }, { caregiverId: userId }] },
       data: { status: 'REVOKED' },
       select: CONTACT_SELECT,
-    });
+    }).catch(rejectChangedContact);
   }
 
   // ─── PATCH /contacts/:id/permissions ────────────────────────────────────────
@@ -152,7 +155,7 @@ export class ContactsService {
       where: { id: contactId, elderlyId, status: 'ACTIVE' },
       data: { permissions: dto.permissions },
       select: CONTACT_SELECT,
-    });
+    }).catch(rejectChangedContact);
   }
 
   // ─── GET /contacts ──────────────────────────────────────────────────────────
@@ -169,4 +172,11 @@ export class ContactsService {
       orderBy: { createdAt: 'desc' },
     });
   }
+}
+
+function rejectChangedContact(error: unknown): never {
+  if (error instanceof Prisma.PrismaClientKnownRequestError && ['P2002', 'P2025'].includes(error.code)) {
+    throw new ConflictException('O vinculo mudou. Atualize a lista.');
+  }
+  throw error;
 }

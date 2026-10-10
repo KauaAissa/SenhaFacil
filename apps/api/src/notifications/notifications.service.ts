@@ -110,6 +110,12 @@ export class NotificationsService {
       });
   }
 
+  async sendEmergency(params: { userId: string; accessLogId: string }): Promise<void> {
+    await this.send(params.userId, { notification: { title: 'Registro de emergencia', body: 'Abra o Senha Facil para consultar o historico.' },
+      data: { type: 'EMERGENCY_ACCESS', accessLogId: params.accessLogId },
+      android: { priority: 'high', notification: { channelId: 'sf_access_requests', defaultSound: true } } });
+  }
+
   private async send(userId: string, message: Omit<admin.messaging.TokenMessage, 'token'>): Promise<void> {
     const messaging = this.messaging;
     if (!messaging) return;

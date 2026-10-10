@@ -44,7 +44,7 @@ export function AccessibleCard({
 const styles = StyleSheet.create({
   card: {
     minHeight: touchTarget.minHeight,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.background,
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: touchTarget.borderRadius,

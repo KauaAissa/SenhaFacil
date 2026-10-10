@@ -1,8 +1,9 @@
 import * as SecureStore from 'expo-secure-store';
 import { decodeBase64 } from '@senha-facil/crypto';
+import { randomUUID } from 'expo-crypto';
 
 const TOKENS_STORE_KEY = 'sf_session_tokens_v2';
-interface Tokens { accessToken: string; refreshToken: string }
+interface Tokens { accessToken: string; refreshToken: string; refreshRequestId?: string }
 
 /**
  * Base URL from Expo public env var.
@@ -104,9 +105,12 @@ export class ApiClient {
     this.controllers.add(controller);
     const timeout = setTimeout(() => controller.abort(), 15_000);
     try {
+      const requestId = tokens.refreshRequestId ?? randomUUID();
+      await this.persist({ ...tokens, refreshRequestId: requestId }, generation);
+      if (generation !== this.generation) throw new Error('SESSION_CHANGED');
       const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refreshToken: tokens.refreshToken }), signal: controller.signal,
+        body: JSON.stringify({ refreshToken: tokens.refreshToken, requestId }), signal: controller.signal,
       });
       if (generation !== this.generation) throw new Error('SESSION_CHANGED');
       if (!response.ok) {
@@ -149,7 +153,7 @@ export class ApiClient {
     body?: unknown,
   ): Promise<T> {
     const generation = this.generation;
-    const token = path.startsWith('/auth/') ? null : await this.getToken();
+    const token = path.startsWith('/auth/') && path !== '/auth/security' ? null : await this.getToken();
     if (generation !== this.generation) throw new Error('SESSION_CHANGED');
 
     const headers: Record<string, string> = {

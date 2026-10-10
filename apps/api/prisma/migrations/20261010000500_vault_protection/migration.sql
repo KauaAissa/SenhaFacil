@@ -1,0 +1,4 @@
+ALTER TABLE "users" ADD COLUMN "authVersion" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "users" ADD COLUMN "securityVersion" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "users" ADD COLUMN "vaultProtection" JSONB;
+ALTER TABLE "users" ADD COLUMN "recoveryHash" TEXT;

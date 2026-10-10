@@ -9,17 +9,18 @@
  */
 
 export const colors = {
-  background: '#FFFFFF',
-  surface: '#F4F6F8',
-  textPrimary: '#101418', // Contraste ~19:1 sobre background
-  textSecondary: '#3C4650', // Contraste ~9:1 sobre background
-  primary: '#0B5FFF', // Azul acessível — contraste ~5.4:1 (usar apenas em botões grandes)
-  primaryDark: '#08348C',
-  success: '#0F7B3E',
-  danger: '#B3261E',
+  background: '#FCFDFD',
+  surface: '#F1F4F6',
+  textPrimary: '#20262B',
+  textSecondary: '#46515B',
+  primary: '#155C50',
+  primaryDark: '#103F37',
+  accent: '#244FC0',
+  success: '#186244',
+  danger: '#A52239',
   warning: '#8A5300',
-  border: '#C7CDD3',
-  disabled: '#9AA3AC',
+  border: '#BBCBC8',
+  disabled: '#596B68',
 } as const;
 
 export const fontSizes = {
@@ -41,8 +42,9 @@ export const spacing = {
 export const touchTarget = {
   minHeight: 56,
   minWidth: 56,
-  borderRadius: 12,
+  borderRadius: 8,
 } as const;
 
 export const theme = { colors, fontSizes, spacing, touchTarget };
+export const fonts = { regular: 'AtkinsonHyperlegible_400Regular', bold: 'AtkinsonHyperlegible_700Bold' } as const;
 export type Theme = typeof theme;

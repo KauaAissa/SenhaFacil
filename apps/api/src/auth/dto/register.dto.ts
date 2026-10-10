@@ -6,7 +6,12 @@ import {
   Matches,
   MaxLength,
   MinLength,
+  Equals,
+  ValidateNested,
+  IsDefined,
 } from 'class-validator';
+import { Type } from 'class-transformer';
+import { VaultProtectionDto } from './vault-protection.dto';
 
 export enum UserRoleDto {
   ELDERLY = 'ELDERLY',
@@ -27,11 +32,19 @@ export class RegisterDto {
   @Matches(/^\+?[1-9]\d{7,14}$/, { message: 'phone must be a valid international number' })
   phone?: string;
 
-  /** Plain password — hashed server-side with Argon2id. Transmitted over HTTPS only. */
-  @IsString()
-  @MinLength(8)
-  @MaxLength(128)
+  @Matches(/^[0-9a-f]{64}$/)
   password: string;
+
+  @Equals(2)
+  authVersion: number;
+
+  @IsDefined()
+  @ValidateNested()
+  @Type(() => VaultProtectionDto)
+  protection: VaultProtectionDto;
+
+  @Matches(/^[0-9a-f]{64}$/)
+  recoveryCredential: string;
 
   /**
    * 32-char lowercase hex string (16 random bytes) generated on the device.

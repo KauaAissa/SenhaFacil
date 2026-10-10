@@ -39,6 +39,10 @@ model User {
   /// Armazenado no servidor para permitir sincronização entre dispositivos.
   /// O salt é PÚBLICO — sem ele não é possível derivar a chave de criptografia.
   kdfSalt   String
+  authVersion Int @default(1)
+  securityVersion Int @default(0)
+  vaultProtection Json?
+  recoveryHash String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -172,6 +176,9 @@ model AuthSession {
   id           String @id
   userId       String
   refreshHash  String @unique
+  previousRefreshHash String?
+  refreshRequestId String?
+  refreshRetryUntil DateTime?
   fcmToken     String? @unique
   expiresAt    DateTime
   revokedAt    DateTime?
@@ -232,6 +239,7 @@ model AccessLog {
 }
 
 enum AccessStatus {
+  CANCELLED
   PENDING          // Aguardando resposta do familiar
   APPROVED         // Familiar aprovou
   DENIED           // Familiar negou

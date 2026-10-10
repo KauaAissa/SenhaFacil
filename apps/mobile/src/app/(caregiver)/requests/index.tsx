@@ -88,12 +88,11 @@ export default function CaregiverRequestsScreen() {
     <Screen scroll={false}>
       <View style={{ paddingTop: spacing.md }}>
         <AccessibleText variant="title">Solicitações</AccessibleText>
-        <AccessibleButton label="Historico de acessos" onPress={() => router.push('/(caregiver)/history')} />
-        <AccessibleButton label="Minha conta" variant="secondary" onPress={() => router.push('/(caregiver)/profile')} />
-        {error && <AccessibleText variant="body" color={colors.danger} accessibilityLiveRegion="polite">{error}</AccessibleText>}
-        <AccessibleText variant="body" color={colors.textSecondary} style={{ marginBottom: spacing.md }}>
-          Acompanhe pedidos de acesso e convites de familiares.
-        </AccessibleText>
+        <View style={{ gap: spacing.sm, marginVertical: spacing.md }}>
+          <AccessibleButton label="Historico de acessos" icon="time-outline" variant="secondary" onPress={() => router.push('/(caregiver)/history')} />
+          <AccessibleButton label="Minha conta" icon="person-circle-outline" variant="secondary" onPress={() => router.push('/(caregiver)/profile')} />
+        </View>
+        {Boolean(error) && <AccessibleText variant="body" color={colors.danger} accessibilityLiveRegion="polite">{error}</AccessibleText>}
       </View>
 
       <FlatList
@@ -126,10 +125,11 @@ export default function CaregiverRequestsScreen() {
                 <AccessibleText variant="caption">
                   {CATEGORY_LABELS[request.vaultItem.category] ?? request.vaultItem.category}
                 </AccessibleText>
-                <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm }}>
+                <View style={{ gap: spacing.sm, marginTop: spacing.sm }}>
                   <View style={{ flex: 1 }}>
                     <AccessibleButton
                       label="Autorizar"
+                      icon="checkmark-outline"
                       onPress={() => handleRespond(request, 'APPROVED')}
                       loading={respondingId === request.id}
                     />
@@ -137,6 +137,7 @@ export default function CaregiverRequestsScreen() {
                   <View style={{ flex: 1 }}>
                     <AccessibleButton
                       label="Negar"
+                      icon="close-outline"
                       variant="danger"
                       onPress={() => handleRespond(request, 'DENIED')}
                       loading={respondingId === request.id}
@@ -160,7 +161,7 @@ export default function CaregiverRequestsScreen() {
               </AccessibleCard>
             ))}
 
-            <AccessibleButton label="Sair da conta" variant="secondary" onPress={() => void logout()} />
+            <AccessibleButton label="Sair da conta" icon="log-out-outline" variant="secondary" onPress={() => void logout()} />
           </View>
         }
       />

@@ -5,6 +5,7 @@ test('push routing accepts database CUIDs and rejects path injection or unknown 
   expect(parseAccessNotification({ type: 'UNLOCK', accessLogId: 'cm123' })).toBeNull();
 });
 import { ApiClient } from '../src/services/api.client';
+import * as SecureStore from 'expo-secure-store';
 
 const token = (expiry: number) => `header.${Buffer.from(JSON.stringify({ exp: expiry })).toString('base64url')}.signature`;
 let client: ApiClient;
@@ -45,4 +46,19 @@ test('refresh failure removes only the online tokens', async () => {
   jest.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false, status: 401, text: async () => 'revoked' } as Response);
   await expect(client.getToken()).rejects.toThrow('401');
   expect(await client.hasToken()).toBe(false);
+});
+
+test('a lost refresh response persists its operation id for retry after restarting the client', async () => {
+  await client.setToken(token(0), 'refresh-old');
+  const fetchMock = jest.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('network lost'));
+  await expect(client.getToken()).rejects.toThrow('network lost');
+  const stored = JSON.parse((await SecureStore.getItemAsync('sf_session_tokens_v2'))!);
+  expect(stored.refreshRequestId).toMatch(/^[a-f0-9-]{36}$/);
+  const renewed = token(Math.floor(Date.now() / 1000) + 3600);
+  fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ accessToken: renewed, refreshToken: 'refresh-new' }) } as Response);
+  const replacement = new ApiClient();
+  expect(await replacement.getToken()).toBe(renewed);
+  const request = JSON.parse(fetchMock.mock.calls[1][1]!.body as string);
+  expect(request.requestId).toBe(stored.refreshRequestId);
+  expect(JSON.parse((await SecureStore.getItemAsync('sf_session_tokens_v2'))!).refreshRequestId).toBeUndefined();
 });

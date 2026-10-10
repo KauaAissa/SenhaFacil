@@ -43,11 +43,14 @@ Os testes unitarios da API usam Prisma simulado; os testes mobile usam SQLite re
 
 ## Limites Importantes
 
+- Autenticacao por senha no Android usa PBKDF2-HMAC-SHA256 nativo assincrono com as mesmas 600.000 iteracoes e chaves anteriores. Requer development build com `react-native-quick-crypto`; Expo Go encerra a tentativa com erro explicito, pois o calculo JavaScript levou varios minutos no emulador. Apos instalar o build, iniciar Metro com `pnpm dev:mobile:client` e a URL da API correta. Nao reduzir iteracoes nem recriar a conta para contornar esse limite.
 - Chaves e bancos SQLite separados por conta. Reinicio restaura a sessao bloqueada; desbloqueio local nao depende de JWT.
 - Itens protegidos sao descriptografados pela politica do app somente apos consultar a autorizacao. O proprietario ja possui a chave local; isso nao e custodia criptografica pelo familiar.
 - Emergencia offline exige reautenticacao e registra uma fila local antes da revelacao. O servidor recebe um relato do aparelho, nao prova independente da biometria.
-- A API ainda recebe a senha mestra na autenticacao. Apesar de guardar hash Argon2id e payload cifrado, a arquitetura atual **nao e zero-knowledge estrito**.
-- Kit de recuperacao e troca segura de senha mestra ainda nao implementados. Nao redefinir senha/KDF sem preservar a chave dos itens existentes.
+- Novas contas usam credencial de autenticacao derivada, separada da chave do cofre. A migracao automatica de contas antigas ainda precisa enviar a senha antiga uma vez. Nao ha garantia de zero-knowledge estrito contra cliente/servidor comprometidos nem protecao absoluta contra adivinhacao de senhas fracas.
+- Kit de recuperacao de 256 bits, troca de senha e substituicao do kit preservam a chave dos itens. A API recebe envelopes cifrados e hashes Argon2id de credenciais derivadas, nunca o codigo do kit ou a chave. Operacoes de seguranca revogam sessoes online; nao apagam copias offline em outros aparelhos.
+- O kit pendente fica temporariamente no SecureStore ate a confirmacao de armazenamento fora do aparelho. Recuperacao exige internet e um kit valido; nao existe reset administrativo que recupere conteudo cifrado sem ele.
+- A primeira tela e o login. Frontend usa Atkinson Hyperlegible, alvos de toque de 56 px, fonte ampliada/contraste, animacoes curtas com reduzir movimento e assets PNG. `http://localhost:8081` e uma previa visual web, nao um cliente web seguro do cofre: SecureStore, biometria e captura exigem Android.
 - Exclusao remove a conta ativa e limpa este aparelho; nao apaga magicamente copias em aparelhos offline ou backups de infraestrutura.
 
 ## Documentacao
@@ -57,3 +60,15 @@ Os testes unitarios da API usam Prisma simulado; os testes mobile usam SQLite re
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): contratos e diagramas para alinhamento do documento academico.
 
 Voz, geolocalizacao, rastreamento de aparelho, chatbot externo, autofill e publicacao iOS permanecem fora do escopo aprovado.
+
+## Smoke HTTP de Recuperacao
+
+Com a API local em execucao e o banco migrado, o teste abaixo cria duas contas ficticias e as remove no `finally`. Nao executar contra producao ou com dados reais.
+
+```powershell
+$env:HTTP_TESTS='1'
+pnpm --filter @senha-facil/crypto exec tsx --test --test-name-pattern=HTTP test/protection.test.ts
+Remove-Item Env:HTTP_TESTS
+```
+
+`HTTP_API_URL` permite apontar outro ambiente de teste autorizado. O teste verifica contrato v2, permissao de contato, cancelamento, troca de senha, recuperacao, rejeicao do kit antigo, preservacao do ciphertext e repeticao de refresh perdido. Sem essa flag, ele e ignorado pela suite normal.

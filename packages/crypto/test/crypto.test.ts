@@ -4,6 +4,7 @@ import { after, before, test } from 'node:test';
 import { gcm } from '@noble/ciphers/aes';
 import {
   configureRandomSource,
+  configureKeyDerivation,
   decodeBase64,
   decryptVaultItem,
   deriveKey,
@@ -43,6 +44,48 @@ test('PBKDF2 matches the Node SHA-256 reference at 600,000 iterations', () => {
   const expected = pbkdf2Sync(password, Buffer.from(salt, 'hex'), 600_000, 32, 'sha256');
   assert.deepEqual(Buffer.from(rawKey), expected);
   expected.fill(0);
+});
+
+test('key derivation yields to timers before completing', async () => {
+  let timerRan = false;
+  const timer = setTimeout(() => { timerRan = true; }, 0);
+  let derived: VaultKey | undefined;
+  try {
+    derived = await deriveKey(password, salt);
+    assert.equal(timerRan, true, 'PBKDF2 must not starve UI tasks');
+  } finally {
+    clearTimeout(timer);
+    if (derived) destroyVaultKey(derived);
+  }
+});
+
+test('native derivation provider preserves parameters, Unicode and buffer cleanup', async () => {
+  let capturedPassword: Uint8Array | undefined;
+  let capturedSalt: Uint8Array | undefined;
+  let output: Uint8Array | undefined;
+  let derived: VaultKey | undefined;
+  configureKeyDerivation(async (passwordBytes, saltBytes, iterations, length) => {
+    capturedPassword = passwordBytes;
+    capturedSalt = saltBytes;
+    assert.equal(iterations, 600_000);
+    assert.equal(length, 32);
+    output = pbkdf2Sync(passwordBytes, saltBytes, iterations, length, 'sha256');
+    return output;
+  });
+  try {
+    derived = await deriveKey(password, salt, true);
+    assert.deepEqual(exportVaultKey(derived), rawKey);
+    assert.ok(capturedPassword?.every((value) => value === 0));
+    assert.ok(capturedSalt?.every((value) => value === 0));
+    assert.ok(output?.every((value) => value === 0));
+    configureKeyDerivation(async () => new Uint8Array(31));
+    await assert.rejects(deriveKey(password, salt), /INVALID_DERIVED_KEY/);
+    configureKeyDerivation(async () => { throw new Error('native failure'); });
+    await assert.rejects(deriveKey(password, salt), /native failure/);
+  } finally {
+    configureKeyDerivation();
+    if (derived) destroyVaultKey(derived);
+  }
 });
 
 test('derivation is deterministic and changes with password or salt', async () => {

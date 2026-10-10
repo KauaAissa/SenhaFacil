@@ -6,6 +6,12 @@ import { OfflineVaultService, offlineVaultService } from '../src/services/offlin
 import { VaultCryptoService, vaultCryptoService } from '../src/services/vault-crypto.service';
 import { vaultService } from '../src/services/vault.service';
 import { apiClient } from '../src/services/api.client';
+import Constants from 'expo-constants';
+import { configureKeyDerivation, deriveKey, exportVaultKey, destroyVaultKey } from '@senha-facil/crypto';
+import { configureMobileKeyDerivation } from '../src/services/key-derivation.native';
+
+jest.mock('expo-constants', () => ({ __esModule: true, default: { executionEnvironment: 'bare' }, ExecutionEnvironment: { StoreClient: 'storeClient' } }));
+jest.mock('react-native-quick-crypto', () => jest.requireActual('node:crypto'));
 
 const key = importVaultKey(new Uint8Array(32).fill(1));
 let database: OfflineVaultService;
@@ -16,7 +22,26 @@ beforeEach(async () => {
   database = new OfflineVaultService();
   await database.initialize(randomUUID());
 });
-afterEach(async () => { await database.close(); jest.restoreAllMocks(); });
+afterEach(async () => { await database.close(); configureKeyDerivation(); jest.restoreAllMocks(); });
+
+test('native adapter uses async SHA-256 PBKDF2 with the existing Unicode key format', async () => {
+  configureMobileKeyDerivation();
+  const salt = '00112233445566778899aabbccddeeff';
+  const password = 'senh\u00e3-\ud83d\udd10';
+  const crypto = jest.requireActual('node:crypto');
+  const derived = await deriveKey(password, salt, true);
+  const bytes = exportVaultKey(derived);
+  try { expect(Buffer.from(bytes)).toEqual(crypto.pbkdf2Sync(password, Buffer.from(salt, 'hex'), 600_000, 32, 'sha256')); }
+  finally { bytes.fill(0); destroyVaultKey(derived); }
+});
+
+test('Expo Go rejects unsupported password derivation instead of loading indefinitely', async () => {
+  const environment = Constants.executionEnvironment;
+  Object.defineProperty(Constants, 'executionEnvironment', { value: 'storeClient', configurable: true });
+  configureMobileKeyDerivation();
+  try { await expect(deriveKey('fictitious-password', '00112233445566778899aabbccddeeff')).rejects.toThrow('development build'); }
+  finally { Object.defineProperty(Constants, 'executionEnvironment', { value: environment, configurable: true }); }
+});
 
 test('isolates accounts and preserves each account when switching back', async () => {
   const first = database.accountId!;
@@ -115,7 +140,7 @@ test('account-scoped key can unlock offline and rejects another password', async
   service.lockKey();
   await expect(service.loadKey(randomUUID())).rejects.toThrow('ENCRYPTION_KEY_NOT_FOUND');
   await service.clearKey(account);
-});
+}, 30_000);
 
 test('keeping work after a server deletion creates a fresh offline ID instead of resurrecting the tombstone', async () => {
   await database.saveItem('item', 'Local', 'OTHER', { password: 'secret' });

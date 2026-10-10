@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { View, FlatList, RefreshControl, Switch, ScrollView, Pressable, Alert } from 'react-native';
+import { View, FlatList, RefreshControl, ScrollView, Pressable, Alert } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Screen } from '../../../components/ui/Screen';
 import { AccessibleText } from '../../../components/ui/AccessibleText';
@@ -11,6 +11,9 @@ import { vaultService } from '../../../services/vault.service';
 import { syncService } from '../../../services/sync.service';
 import type { LocalVaultItem } from '../../../services/offline-vault.service';
 import { colors, spacing } from '../../../theme/theme';
+import { Ionicons } from '@expo/vector-icons';
+import { useAuthStore } from '../../../stores/auth.store';
+import { AccessibleSwitch } from '../../../components/ui/AccessibleSwitch';
 
 const CATEGORY_LABELS: Record<string, string> = {
   BANKING: 'Banco',
@@ -23,6 +26,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 };
 
 export default function VaultListScreen() {
+  const isOffline = useAuthStore((state) => state.isOffline);
   const router = useRouter();
   const [items, setItems] = useState<LocalVaultItem[]>([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -68,16 +72,17 @@ export default function VaultListScreen() {
   return (
     <Screen scroll={false}>
       <View style={{ paddingVertical: spacing.md }}>
-        <AccessibleText variant="title">Meu Cofre</AccessibleText>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+          <Ionicons name="lock-closed-outline" size={26} color={colors.primary} accessible={false} />
+          <AccessibleText variant="title">Meu cofre</AccessibleText>
+        </View>
         <AccessibleText variant="body" color={colors.textSecondary}>
           {items.length} {items.length === 1 ? 'senha guardada' : 'senhas guardadas'}
         </AccessibleText>
+        {isOffline && <AccessibleText variant="caption" color={colors.warning}>Neste aparelho · Sem conexao</AccessibleText>}
       </View>
       <AccessibleTextInput label="Buscar senha" value={query} onChangeText={setQuery} />
-      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-        <AccessibleText variant="body" style={{ flex: 1 }}>Somente favoritas</AccessibleText>
-        <Switch accessibilityLabel="Mostrar somente favoritas" value={favorites} onValueChange={setFavorites} />
-      </View>
+      <AccessibleSwitch label="Somente favoritas" value={favorites} onValueChange={setFavorites} />
       <ScrollView horizontal style={{ flexGrow: 0, marginVertical: spacing.sm }} showsHorizontalScrollIndicator={false}>
         {Object.entries({ ALL: 'Todas', ...CATEGORY_LABELS }).map(([value, label]) => (
           <Pressable key={value} onPress={() => setCategory(value)} accessibilityRole="button" accessibilityLabel={label}
@@ -86,7 +91,7 @@ export default function VaultListScreen() {
           </Pressable>
         ))}
       </ScrollView>
-      {error && <AccessibleText variant="body" color={colors.danger} accessibilityLiveRegion="polite">{error}</AccessibleText>}
+      {Boolean(error) && <AccessibleText variant="body" color={colors.danger} accessibilityLiveRegion="polite">{error}</AccessibleText>}
 
       <FlatList
         data={visible}
@@ -114,14 +119,15 @@ export default function VaultListScreen() {
               item.requiresApproval ? ', requer aprovação de um familiar' : ''
             }`}
           >
-            <AccessibleText variant="bodyLarge" bold>
-              {item.isFavorite ? '⭐ ' : ''}
-              {item.label}
-            </AccessibleText>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+              <Ionicons name={item.isFavorite ? 'star' : 'key-outline'} size={24} color={item.isFavorite ? colors.warning : colors.accent} accessible={false} />
+              <AccessibleText variant="bodyLarge" bold style={{ flex: 1 }}>{item.label}</AccessibleText>
+              <Ionicons name="chevron-forward-outline" size={22} color={colors.textSecondary} accessible={false} />
+            </View>
             <AccessibleText variant="caption">{CATEGORY_LABELS[item.category]}</AccessibleText>
             {item.requiresApproval && (
               <AccessibleText variant="caption" color={colors.warning}>
-                🔒 Requer aprovação de um familiar
+                Requer aprovação de um familiar
               </AccessibleText>
             )}
             {!item.synced && (
@@ -133,7 +139,7 @@ export default function VaultListScreen() {
         )}
       />
 
-      <AccessibleButton label="Adicionar nova senha" onPress={() => router.push('/(elderly)/vault/new')} />
+      <AccessibleButton label="Adicionar senha" icon="add-outline" onPress={() => router.push('/(elderly)/vault/new')} />
     </Screen>
   );
 }

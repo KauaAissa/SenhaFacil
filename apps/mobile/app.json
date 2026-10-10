@@ -7,10 +7,18 @@
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
-    "splash": {
-      "backgroundColor": "#FFFFFF"
+    "icon": "./assets/icon.png",
+    "web": {
+      "favicon": "./assets/icon.png"
     },
-    "assetBundlePatterns": ["**/*"],
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#155C50"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.senhafacil.app",
@@ -21,16 +29,32 @@
     "android": {
       "package": "com.senhafacil.app",
       "allowBackup": false,
-      "blockedPermissions": ["android.permission.READ_EXTERNAL_STORAGE", "android.permission.WRITE_EXTERNAL_STORAGE"],
-      "permissions": ["USE_BIOMETRIC", "USE_FINGERPRINT"],
+      "blockedPermissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
+      ],
+      "permissions": [
+        "USE_BIOMETRIC",
+        "USE_FINGERPRINT",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT"
+      ],
       "adaptiveIcon": {
-        "backgroundColor": "#FFFFFF"
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#155C50"
       }
     },
     "plugins": [
       "expo-router",
       "expo-dev-client",
-      "expo-notifications",
+      "react-native-quick-crypto",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#155C50"
+        }
+      ],
       "expo-secure-store",
       [
         "expo-local-authentication",
@@ -41,6 +65,13 @@
     ],
     "experiments": {
       "typedRoutes": false
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "bf7a3e81-97af-4127-93fa-945791f84f71"
+      }
+    },
+    "owner": "senhafacil"
   }
 }
