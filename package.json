@@ -5,7 +5,12 @@
   "packageManager": "pnpm@9.0.0",
   "scripts": {
     "dev": "turbo run dev",
+    "dev:api": "pnpm --filter @senha-facil/api dev",
+    "dev:mobile": "pnpm --filter @senha-facil/mobile dev",
+    "dev:mobile:client": "pnpm --filter @senha-facil/mobile dev:client",
     "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "test:crypto": "pnpm --filter @senha-facil/crypto test",
     "lint": "turbo run lint",
     "test": "turbo run test",
     "db:generate": "turbo run db:generate",

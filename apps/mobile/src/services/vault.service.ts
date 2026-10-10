@@ -1,3 +1,4 @@
+import { randomUUID } from 'expo-crypto';
 import type { VaultItemPlaintext } from '@senha-facil/crypto';
 import { offlineVaultService, type DecryptedVaultItem } from './offline-vault.service';
 import { syncService } from './sync.service';
@@ -71,9 +72,7 @@ class VaultService {
 }
 
 function generateLocalId(): string {
-  // crypto.randomUUID() is available via the Web Crypto polyfill already
-  // required by @senha-facil/crypto (deriveKey/encryptVaultItem use crypto.subtle).
-  return `local_${crypto.randomUUID()}`;
+  return `local_${randomUUID()}`;
 }
 
 export const vaultService = new VaultService();

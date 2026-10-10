@@ -1,5 +1,17 @@
 import * as SecureStore from 'expo-secure-store';
-import { deriveKey } from '@senha-facil/crypto';
+import { getRandomBytes } from 'expo-crypto';
+import {
+  configureRandomSource,
+  decodeBase64,
+  deriveKey,
+  destroyVaultKey,
+  encodeBase64,
+  exportVaultKey,
+  importVaultKey,
+  type VaultKey,
+} from '@senha-facil/crypto';
+
+configureRandomSource(getRandomBytes);
 
 const ENC_KEY_STORE_KEY = 'sf_enc_key_raw';
 
@@ -10,10 +22,10 @@ const ENC_KEY_STORE_KEY = 'sf_enc_key_raw';
  *   - The key is derived from the master password via PBKDF2 (600 000 iterations)
  *   - Persisted in expo-secure-store → iOS Keychain / Android Keystore (hardware-backed)
  *   - requireAuthentication: true → OS-level biometric / PIN gate before every access
- *   - In-memory key is non-extractable (CryptoKey) — cannot be serialized or exfiltrated
+ *   - Key bytes are kept outside the serializable key handle and wiped on locking
  */
 class VaultCryptoService {
-  private _cryptoKey: CryptoKey | null = null;
+  private _cryptoKey: VaultKey | null = null;
 
   /**
    * Derives a new encryption key and persists it in SecureStore.
@@ -23,17 +35,19 @@ class VaultCryptoService {
    * @param kdfSalt        - 32-char hex salt returned by the API on register/login
    */
   async initializeKey(masterPassword: string, kdfSalt: string): Promise<void> {
-    // extractable=true so we can export raw bytes for SecureStore persistence
     const exportableKey = await deriveKey(masterPassword, kdfSalt, true);
-    const rawKey = await crypto.subtle.exportKey('raw', exportableKey);
-
-    await SecureStore.setItemAsync(ENC_KEY_STORE_KEY, bufferToBase64(rawKey), {
-      requireAuthentication: true,
-      authenticationPrompt: 'Confirme sua identidade para proteger o cofre',
-    });
-
-    // Re-import as non-extractable for in-memory security
-    this._cryptoKey = await importRawKey(rawKey);
+    const rawKey = exportVaultKey(exportableKey);
+    try {
+      await SecureStore.setItemAsync(ENC_KEY_STORE_KEY, encodeBase64(rawKey), {
+        requireAuthentication: true,
+        authenticationPrompt: 'Confirme sua identidade para proteger o cofre',
+      });
+      this.lockKey();
+      this._cryptoKey = importVaultKey(rawKey);
+    } finally {
+      rawKey.fill(0);
+      destroyVaultKey(exportableKey);
+    }
   }
 
   /**
@@ -53,14 +67,21 @@ class VaultCryptoService {
       throw new Error('ENCRYPTION_KEY_NOT_FOUND');
     }
 
-    this._cryptoKey = await importRawKey(base64ToBuffer(keyBase64));
+    const rawKey = decodeBase64(keyBase64);
+    try {
+      const key = importVaultKey(rawKey);
+      this.lockKey();
+      this._cryptoKey = key;
+    } finally {
+      rawKey.fill(0);
+    }
   }
 
   /**
-   * Returns the in-memory CryptoKey.
+   * Returns the in-memory key handle.
    * Throws if loadKey() has not been called yet this session.
    */
-  get key(): CryptoKey {
+  get key(): VaultKey {
     if (!this._cryptoKey) {
       throw new Error('KEY_NOT_LOADED');
     }
@@ -77,7 +98,7 @@ class VaultCryptoService {
    * Use on logout or account deletion.
    */
   async clearKey(): Promise<void> {
-    this._cryptoKey = null;
+    this.lockKey();
     await SecureStore.deleteItemAsync(ENC_KEY_STORE_KEY);
   }
 
@@ -86,34 +107,9 @@ class VaultCryptoService {
    * Use when backgrounding the app to force re-authentication on resume.
    */
   lockKey(): void {
+    if (this._cryptoKey) destroyVaultKey(this._cryptoKey);
     this._cryptoKey = null;
   }
-}
-
-// --- Internal helpers ---
-
-async function importRawKey(raw: ArrayBuffer | Uint8Array): Promise<CryptoKey> {
-  return crypto.subtle.importKey(
-    'raw',
-    raw,
-    { name: 'AES-GCM', length: 256 },
-    false, // non-extractable in memory
-    ['encrypt', 'decrypt'],
-  );
-}
-
-function bufferToBase64(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
-}
-
-function base64ToBuffer(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
 }
 
 export const vaultCryptoService = new VaultCryptoService();
