@@ -4,16 +4,19 @@ import {
   configureRandomSource,
   decodeBase64,
   deriveKey,
+  decryptVaultItem,
   destroyVaultKey,
   encodeBase64,
   exportVaultKey,
+  encryptVaultItem,
   importVaultKey,
   type VaultKey,
 } from '@senha-facil/crypto';
 
 configureRandomSource(getRandomBytes);
 
-const ENC_KEY_STORE_KEY = 'sf_enc_key_raw';
+const keyName = (ownerId: string) => `sf_key_${ownerId}`;
+const verifierName = (ownerId: string) => `sf_verifier_${ownerId}`;
 
 /**
  * Manages the full lifecycle of the AES-256-GCM encryption key on the device.
@@ -24,7 +27,7 @@ const ENC_KEY_STORE_KEY = 'sf_enc_key_raw';
  *   - requireAuthentication: true → OS-level biometric / PIN gate before every access
  *   - Key bytes are kept outside the serializable key handle and wiped on locking
  */
-class VaultCryptoService {
+export class VaultCryptoService {
   private _cryptoKey: VaultKey | null = null;
 
   /**
@@ -34,14 +37,21 @@ class VaultCryptoService {
    * @param masterPassword - The user's login password (same one sent to the server)
    * @param kdfSalt        - 32-char hex salt returned by the API on register/login
    */
-  async initializeKey(masterPassword: string, kdfSalt: string): Promise<void> {
+  async initializeKey(ownerId: string, masterPassword: string, kdfSalt: string): Promise<void> {
     const exportableKey = await deriveKey(masterPassword, kdfSalt, true);
     const rawKey = exportVaultKey(exportableKey);
     try {
-      await SecureStore.setItemAsync(ENC_KEY_STORE_KEY, encodeBase64(rawKey), {
-        requireAuthentication: true,
-        authenticationPrompt: 'Confirme sua identidade para proteger o cofre',
-      });
+      const verifier = await encryptVaultItem({ password: 'sf_key_check' }, exportableKey);
+      await SecureStore.setItemAsync(verifierName(ownerId), JSON.stringify(verifier));
+      if (SecureStore.canUseBiometricAuthentication()) {
+        await SecureStore.setItemAsync(keyName(ownerId), encodeBase64(rawKey), {
+          requireAuthentication: true,
+          keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+          authenticationPrompt: 'Confirme sua identidade para proteger o cofre',
+        });
+      } else {
+        await SecureStore.deleteItemAsync(keyName(ownerId));
+      }
       this.lockKey();
       this._cryptoKey = importVaultKey(rawKey);
     } finally {
@@ -56,8 +66,8 @@ class VaultCryptoService {
    *
    * @param authPrompt - Custom biometric dialog message
    */
-  async loadKey(authPrompt = 'Confirme sua identidade para acessar o cofre'): Promise<void> {
-    const keyBase64 = await SecureStore.getItemAsync(ENC_KEY_STORE_KEY, {
+  async loadKey(ownerId: string, authPrompt = 'Confirme sua identidade para acessar o cofre'): Promise<void> {
+    const keyBase64 = await SecureStore.getItemAsync(keyName(ownerId), {
       requireAuthentication: true,
       authenticationPrompt: authPrompt,
     });
@@ -81,6 +91,21 @@ class VaultCryptoService {
    * Returns the in-memory key handle.
    * Throws if loadKey() has not been called yet this session.
    */
+  async unlockWithPassword(ownerId: string, password: string, salt: string): Promise<void> {
+    const verifier = await SecureStore.getItemAsync(verifierName(ownerId));
+    if (!verifier) throw new Error('Entre novamente com internet para preparar o acesso offline.');
+    const key = await deriveKey(password, salt);
+    try {
+      const checked = await decryptVaultItem(JSON.parse(verifier), key);
+      if (checked.password !== 'sf_key_check') throw new Error('INVALID_KEY');
+      this.lockKey();
+      this._cryptoKey = key;
+    } catch {
+      destroyVaultKey(key);
+      throw new Error('Senha mestra incorreta.');
+    }
+  }
+
   get key(): VaultKey {
     if (!this._cryptoKey) {
       throw new Error('KEY_NOT_LOADED');
@@ -97,9 +122,10 @@ class VaultCryptoService {
    * Clears the key from memory AND from SecureStore.
    * Use on logout or account deletion.
    */
-  async clearKey(): Promise<void> {
+  async clearKey(ownerId: string): Promise<void> {
     this.lockKey();
-    await SecureStore.deleteItemAsync(ENC_KEY_STORE_KEY);
+    await SecureStore.deleteItemAsync(keyName(ownerId));
+    await SecureStore.deleteItemAsync(verifierName(ownerId));
   }
 
   /**

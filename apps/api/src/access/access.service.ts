@@ -4,11 +4,13 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AccessGateway } from './access.gateway';
 import type { RequestAccessDto } from './dto/request-access.dto';
 import type { RespondAccessDto } from './dto/respond-access.dto';
+import type { EmergencyAccessDto } from './dto/emergency-access.dto';
 
 /** Window (minutes) for a caregiver to respond before auto-expiry */
 const EXPIRY_MINUTES = 2;
@@ -24,72 +26,38 @@ export class AccessService {
   // ─── POST /access/request ──────────────────────────────────────────────────
 
   async requestAccess(elderlyUserId: string, dto: RequestAccessDto) {
-    // 1. Verify vault item ownership and that it requires approval
-    const vaultItem = await this.prisma.vaultItem.findFirst({
-      where: { id: dto.vaultItemId, userId: elderlyUserId },
-      select: { id: true, label: true, requiresApproval: true },
-    });
-
-    if (!vaultItem) throw new NotFoundException('Vault item not found');
-
-    if (!vaultItem.requiresApproval) {
-      throw new BadRequestException('This vault item does not require assisted access');
-    }
-
-    // 2. Prevent duplicate PENDING requests for the same item
-    const duplicatePending = await this.prisma.accessLog.findFirst({
-      where: {
-        vaultItemId: dto.vaultItemId,
-        requesterId: elderlyUserId,
-        status: 'PENDING',
-        expiresAt: { gt: new Date() },
-      },
-      select: { id: true, expiresAt: true },
-    });
-
-    if (duplicatePending) {
-      throw new BadRequestException(
-        `A pending request for this item already exists (expires at ${duplicatePending.expiresAt.toISOString()})`,
-      );
-    }
-
-    // 3. Create the AccessLog
-    const expiresAt = new Date(Date.now() + EXPIRY_MINUTES * 60_000);
-
-    const accessLog = await this.prisma.accessLog.create({
-      data: {
-        vaultItemId: dto.vaultItemId,
-        requesterId: elderlyUserId,
-        status: 'PENDING',
-        expiresAt,
-        deviceInfo: dto.deviceInfo,
-      },
-      select: { id: true, status: true, expiresAt: true },
-    });
-
-    // 4. Fetch active caregivers with APPROVE_ACCESS permission
-    const contacts = await this.prisma.trustedContact.findMany({
-      where: {
-        elderlyId: elderlyUserId,
-        status: 'ACTIVE',
-        permissions: { has: 'APPROVE_ACCESS' },
-      },
-      include: { caregiver: { select: { fcmToken: true } } },
-    });
-
-    const elderly = await this.prisma.user.findUnique({
-      where: { id: elderlyUserId },
-      select: { name: true },
+    const itemId = dto.vaultItemId.startsWith('local_')
+      ? `sf_${createHash('sha256').update(`${elderlyUserId}:${dto.vaultItemId}`).digest('hex')}` : dto.vaultItemId;
+    const { accessLog, contacts, created } = await this.prisma.serializable(async (transaction) => {
+      const vaultItem = await transaction.vaultItem.findFirst({
+        where: { id: itemId, userId: elderlyUserId, deletedAt: null },
+        select: { id: true, label: true, requiresApproval: true },
+      });
+      if (!vaultItem) throw new NotFoundException('Senha nao encontrada.');
+      if (!vaultItem.requiresApproval) throw new BadRequestException('Esta senha nao requer aprovacao.');
+      const contacts = await transaction.trustedContact.findMany({
+        where: { elderlyId: elderlyUserId, status: 'ACTIVE', permissions: { has: 'APPROVE_ACCESS' }, caregiver: { isActive: true } },
+        include: { caregiver: { select: { id: true } } },
+      });
+      if (!contacts.length) throw new BadRequestException('Adicione um familiar ativo com permissao para aprovar acessos.');
+      const pending = await transaction.accessLog.findFirst({
+        where: { vaultItemId: itemId, requesterId: elderlyUserId, status: 'PENDING', expiresAt: { gt: new Date() } },
+        select: { id: true, status: true, expiresAt: true },
+      });
+      if (pending) return { vaultItem, contacts, accessLog: pending, created: false };
+      const accessLog = await transaction.accessLog.create({
+        data: { vaultItemId: itemId, requesterId: elderlyUserId, status: 'PENDING',
+          expiresAt: new Date(Date.now() + EXPIRY_MINUTES * 60_000), deviceInfo: dto.deviceInfo },
+        select: { id: true, status: true, expiresAt: true },
+      });
+      return { vaultItem, contacts, accessLog, created: true };
     });
 
     // 5. Fire FCM pushes — use allSettled so one failure doesn't abort others
-    const pushPromises = contacts
-      .filter((tc) => Boolean(tc.caregiver.fcmToken))
+    const pushPromises = (created ? contacts : [])
       .map((tc) =>
         this.notifications.sendAccessRequest({
-          fcmToken: tc.caregiver.fcmToken!,
-          elderlyName: elderly?.name ?? 'Usuário',
-          vaultItemLabel: vaultItem.label,
+          userId: tc.caregiver.id,
           accessLogId: accessLog.id,
         }),
       );
@@ -110,7 +78,7 @@ export class AccessService {
       where: { id: dto.accessLogId },
       include: {
         vaultItem: { select: { userId: true, label: true } },
-        requester: { select: { id: true, fcmToken: true } },
+        requester: { select: { id: true } },
       },
     });
 
@@ -122,7 +90,7 @@ export class AccessService {
       );
     }
 
-    if (new Date() > accessLog.expiresAt) {
+    if (new Date() >= accessLog.expiresAt) {
       throw new BadRequestException('Access request has already expired');
     }
 
@@ -145,30 +113,30 @@ export class AccessService {
     const newStatus = dto.decision === 'APPROVED' ? 'APPROVED' : 'DENIED';
     const resolvedAt = new Date();
 
-    const updated = await this.prisma.accessLog.update({
-      where: { id: dto.accessLogId },
+    const updated = await this.prisma.accessLog.updateMany({
+      where: { id: dto.accessLogId, status: 'PENDING', expiresAt: { gt: resolvedAt },
+        vaultItem: { deletedAt: null },
+        requester: { elderlyRelations: { some: { caregiverId, status: 'ACTIVE', permissions: { has: 'APPROVE_ACCESS' } } } } },
       data: { status: newStatus, approverId: caregiverId, resolvedAt, notes: dto.notes },
-      select: { id: true, status: true, resolvedAt: true },
     });
+    if (updated.count !== 1) throw new BadRequestException('A solicitacao foi respondida, expirou ou o vinculo foi revogado.');
 
     // Notify elderly user via WebSocket (primary — real-time)
     this.gateway.notifyAccessResolved({
       elderlyUserId: accessLog.requester.id,
-      accessLogId: updated.id,
+      accessLogId: accessLog.id,
       status: newStatus,
       notes: dto.notes,
     });
 
     // Notify elderly user via FCM (fallback — if WS connection is closed)
-    if (accessLog.requester.fcmToken) {
       await this.notifications.sendAccessResolved({
-        fcmToken: accessLog.requester.fcmToken,
+        userId: accessLog.requester.id,
         status: newStatus,
-        vaultItemLabel: accessLog.vaultItem.label,
+        accessLogId: accessLog.id,
       });
-    }
 
-    return { status: updated.status, resolvedAt: updated.resolvedAt };
+    return { status: newStatus, resolvedAt };
   }
 
   // ─── GET /access/pending ────────────────────────────────────────────────────
@@ -197,6 +165,7 @@ export class AccessService {
       where: {
         status: 'PENDING',
         expiresAt: { gt: new Date() },
+        vaultItem: { deletedAt: null },
         requesterId: { in: elderlyIds },
       },
       select: {
@@ -226,37 +195,81 @@ export class AccessService {
       where: { status: 'PENDING', expiresAt: { lt: now } },
       select: {
         id: true,
-        requester: { select: { id: true, fcmToken: true } },
+        requester: { select: { id: true } },
         vaultItem: { select: { label: true } },
       },
     });
 
     if (stale.length === 0) return 0;
 
-    await this.prisma.accessLog.updateMany({
-      where: { id: { in: stale.map((l) => l.id) } },
-      data: { status: 'EXPIRED', resolvedAt: now },
-    });
+    let count = 0;
 
     // Notify each elderly user (WS primary, FCM fallback)
     await Promise.allSettled(
       stale.map(async (log) => {
+        const expired = await this.prisma.accessLog.updateMany({
+          where: { id: log.id, status: 'PENDING', expiresAt: { lte: now } },
+          data: { status: 'EXPIRED', resolvedAt: now },
+        });
+        if (expired.count !== 1) return;
+        count += 1;
         this.gateway.notifyAccessResolved({
           elderlyUserId: log.requester.id,
           accessLogId: log.id,
           status: 'EXPIRED',
         });
 
-        if (log.requester.fcmToken) {
           await this.notifications.sendAccessResolved({
-            fcmToken: log.requester.fcmToken,
+            userId: log.requester.id,
             status: 'EXPIRED',
-            vaultItemLabel: log.vaultItem.label,
+            accessLogId: log.id,
           });
-        }
       }),
     );
 
-    return stale.length;
+    return count;
+  }
+
+  async findState(userId: string, id: string) {
+    const log = await this.prisma.accessLog.findUnique({ where: { id },
+      select: { id: true, vaultItemId: true, requesterId: true, approverId: true, status: true, expiresAt: true, notes: true } });
+    if (!log) throw new NotFoundException('Solicitacao nao encontrada.');
+    if (log.requesterId !== userId) {
+      const relationship = await this.prisma.trustedContact.findFirst({ where: { elderlyId: log.requesterId, caregiverId: userId,
+        status: 'ACTIVE', permissions: { has: 'APPROVE_ACCESS' } } });
+      if (!relationship) throw new ForbiddenException('Sem permissao para esta solicitacao.');
+    }
+    if (log.status === 'APPROVED') {
+      const relationship = await this.prisma.trustedContact.findFirst({ where: { elderlyId: log.requesterId,
+        caregiverId: log.approverId ?? '', status: 'ACTIVE', permissions: { has: 'APPROVE_ACCESS' } } });
+      if (!relationship) return { ...log, status: 'DENIED' as const };
+    }
+    return { ...log, status: log.expiresAt <= new Date() && log.status === 'PENDING' ? 'EXPIRED' : log.status };
+  }
+
+  async history(userId: string) {
+    return this.prisma.accessLog.findMany({
+      where: { OR: [{ requesterId: userId }, { requester: { elderlyRelations: { some: {
+        caregiverId: userId, status: 'ACTIVE', permissions: { has: 'APPROVE_ACCESS' },
+      } } } }] },
+      select: { id: true, status: true, requestedAt: true, resolvedAt: true, expiresAt: true, fallbackUsed: true, notes: true,
+        requester: { select: { id: true, name: true } }, approver: { select: { name: true } },
+        vaultItem: { select: { id: true, label: true, category: true } } },
+      orderBy: { requestedAt: 'desc' }, take: 100,
+    });
+  }
+
+  async recordEmergency(userId: string, dto: EmergencyAccessDto) {
+    const occurredAt = new Date(dto.occurredAt);
+    if (occurredAt.getTime() > Date.now() + 60_000) throw new BadRequestException('Horario de emergencia invalido.');
+    const itemId = dto.vaultItemId.startsWith('local_')
+      ? `sf_${createHash('sha256').update(`${userId}:${dto.vaultItemId}`).digest('hex')}` : dto.vaultItemId;
+    const item = await this.prisma.vaultItem.findFirst({ where: { id: itemId, userId } });
+    if (!item) throw new NotFoundException('Senha ainda nao sincronizada.');
+    const id = `emergency_${createHash('sha256').update(`${userId}:${dto.eventId}`).digest('hex')}`;
+    return this.prisma.accessLog.upsert({ where: { id }, update: {},
+      create: { id, vaultItemId: itemId, requesterId: userId, status: 'FALLBACK_GRANTED', fallbackUsed: true,
+        requestedAt: occurredAt, resolvedAt: occurredAt, expiresAt: occurredAt, deviceInfo: 'offline_client_report' },
+      select: { id: true, status: true } });
   }
 }

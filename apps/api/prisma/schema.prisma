@@ -1,6 +1,6 @@
 // =============================================================================
 // Senha Fácil — Prisma Schema
-// Arquitetura: Zero-Knowledge Encryption + Assisted Access Flow
+// Arquitetura: Client-side Vault Encryption + Assisted Access Flow
 // =============================================================================
 
 generator client {
@@ -22,6 +22,8 @@ model User {
   email        String   @unique
   phone        String?  @unique
   name         String
+  surname      String @default("")
+  dateOfBirth  DateTime? @db.Date
 
   /// Hash Argon2id da senha mestre — usada APENAS para autenticação no servidor.
   /// A chave de criptografia do cofre é derivada no cliente e NUNCA enviada.
@@ -30,8 +32,7 @@ model User {
   role      UserRole @default(ELDERLY)
   isActive  Boolean  @default(true)
 
-  /// Token FCM para notificações push de Acesso Assistido.
-  /// Atualizado a cada login no app do familiar.
+  /// Legacy token, no longer used for push. Tokens are scoped to AuthSession.
   fcmToken  String?
 
   /// Salt público para Key Derivation Function (PBKDF2/Argon2id).
@@ -48,6 +49,8 @@ model User {
   caregiverRelations TrustedContact[] @relation("CaregiverUser")
   requestedAccess    AccessLog[]      @relation("AccessRequester")
   approvedAccess     AccessLog[]      @relation("AccessApprover")
+  syncOperations     VaultSyncOperation[]
+  sessions           AuthSession[]
 
   @@map("users")
 }
@@ -100,9 +103,10 @@ enum VaultPermission {
 // VAULT ITEM
 // Entrada criptografada no cofre de senhas do idoso.
 //
-// ZERO-KNOWLEDGE: O campo `encryptedPayload` contém um JSON cifrado com
-// AES-256-GCM no dispositivo do usuário. O servidor armazena APENAS o blob
-// cifrado e o IV. O plaintext NUNCA trafega pela rede ou é armazenado no DB.
+// `encryptedPayload` contains client-side AES-256-GCM ciphertext.
+// Labels, categories and audit metadata remain readable on the server.
+// Authentication currently receives the master password; strict zero-knowledge
+// requires separating authentication from vault key derivation.
 //
 // Estrutura do plaintext (antes da cifragem):
 // {
@@ -130,6 +134,8 @@ model VaultItem {
   requiresApproval Boolean @default(false)
 
   isFavorite Boolean  @default(false)
+  version    Int      @default(1)
+  deletedAt  DateTime?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -149,6 +155,31 @@ enum VaultCategory {
   GOVERNMENT   // Gov.br, INSS, Receita Federal
   SHOPPING     // E-commerce
   OTHER        // Demais categorias
+}
+
+model VaultSyncOperation {
+  userId      String
+  operationId String
+  result      Json
+  createdAt   DateTime @default(now())
+  user        User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, operationId])
+  @@map("vault_sync_operations")
+}
+
+model AuthSession {
+  id           String @id
+  userId       String
+  refreshHash  String @unique
+  fcmToken     String? @unique
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  createdAt    DateTime @default(now())
+  user         User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("auth_sessions")
 }
 
 // =============================================================================
@@ -191,8 +222,8 @@ model AccessLog {
   notes String?
 
   vaultItem VaultItem @relation(fields: [vaultItemId], references: [id], onDelete: Cascade)
-  requester User      @relation("AccessRequester", fields: [requesterId], references: [id])
-  approver  User?     @relation("AccessApprover",  fields: [approverId],  references: [id])
+  requester User      @relation("AccessRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  approver  User?     @relation("AccessApprover",  fields: [approverId],  references: [id], onDelete: SetNull)
 
   @@index([vaultItemId])
   @@index([requesterId])

@@ -6,7 +6,7 @@
     "build": "nest build",
     "dev": "nest start --watch",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint \"{src,apps,libs,test}/**/*.ts\"",
+    "lint": "eslint src test",
     "test": "jest",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",

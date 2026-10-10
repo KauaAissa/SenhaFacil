@@ -1,4 +1,4 @@
-import { ArrayNotEmpty, IsArray, IsEnum } from 'class-validator';
+import { ArrayMaxSize, ArrayUnique, IsArray, IsEnum } from 'class-validator';
 
 export enum VaultPermissionDto {
   VIEW_ITEMS = 'VIEW_ITEMS',
@@ -9,7 +9,8 @@ export enum VaultPermissionDto {
 export class UpdatePermissionsDto {
   /** Full replacement of the permission set granted to this caregiver. */
   @IsArray()
-  @ArrayNotEmpty()
+  @ArrayMaxSize(2)
+  @ArrayUnique()
   @IsEnum(VaultPermissionDto, { each: true })
   permissions: VaultPermissionDto[];
 }

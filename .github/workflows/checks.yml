@@ -13,10 +13,22 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: senha_facil
+          POSTGRES_PASSWORD: senha_facil
+          POSTGRES_DB: senha_facil
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U senha_facil"
+          --health-interval 10s --health-timeout 5s --health-retries 5
     env:
       DATABASE_URL: postgresql://senha_facil:senha_facil@localhost:5432/senha_facil?schema=public
       EXPO_PUBLIC_API_URL: http://localhost:3000
       CI: '1'
+      INTEGRATION_TESTS: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -26,6 +38,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @senha-facil/api db:generate
+      - run: pnpm --filter @senha-facil/api exec prisma migrate deploy
       - run: pnpm typecheck
-      - run: pnpm test:crypto
+      - run: pnpm lint
+      - run: pnpm test
       - run: pnpm --filter @senha-facil/mobile build:android:bundle

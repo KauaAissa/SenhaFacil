@@ -1,6 +1,9 @@
 import { Pressable, StyleSheet, ActivityIndicator, type GestureResponderEvent } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import type { ComponentProps } from 'react';
 import { AccessibleText } from './AccessibleText';
 import { colors, spacing, touchTarget } from '../../theme/theme';
+import { useAccessibilityStore } from '../../stores/accessibility.store';
 
 type Variant = 'primary' | 'secondary' | 'danger';
 
@@ -11,6 +14,7 @@ interface AccessibleButtonProps {
   disabled?: boolean;
   loading?: boolean;
   accessibilityHint?: string;
+  icon?: ComponentProps<typeof Ionicons>['name'];
 }
 
 /**
@@ -28,8 +32,10 @@ export function AccessibleButton({
   disabled = false,
   loading = false,
   accessibilityHint,
+  icon,
 }: AccessibleButtonProps) {
   const isDisabled = disabled || loading;
+  const highContrast = useAccessibilityStore((state) => state.highContrast);
 
   return (
     <Pressable
@@ -42,6 +48,7 @@ export function AccessibleButton({
       style={({ pressed }) => [
         styles.base,
         styles[variant],
+        highContrast && { backgroundColor: '#000000' },
         isDisabled && styles.disabled,
         pressed && !isDisabled && styles.pressed,
       ]}
@@ -49,9 +56,10 @@ export function AccessibleButton({
       {loading ? (
         <ActivityIndicator color="#FFFFFF" />
       ) : (
-        <AccessibleText variant="bodyLarge" bold color="#FFFFFF">
-          {label}
-        </AccessibleText>
+        <>
+          {icon && <Ionicons name={icon} size={24} color="#FFFFFF" accessible={false} />}
+          <AccessibleText variant="bodyLarge" bold color="#FFFFFF" style={{ flexShrink: 1, textAlign: 'center' }}>{label}</AccessibleText>
+        </>
       )}
     </Pressable>
   );
@@ -62,6 +70,8 @@ const styles = StyleSheet.create({
     minHeight: touchTarget.minHeight,
     borderRadius: touchTarget.borderRadius,
     alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.sm,
     justifyContent: 'center',
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,

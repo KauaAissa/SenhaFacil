@@ -12,6 +12,7 @@ import {
   encryptVaultItem,
   exportVaultKey,
   generateSalt,
+  generatePassword,
   importVaultKey,
   type VaultKey,
 } from '../src/index';
@@ -188,4 +189,22 @@ test('rejects an invalid random provider instead of using an insecure fallback',
   } finally {
     configureRandomSource((length) => new Uint8Array(randomBytes(length)));
   }
+});
+
+test('password generator includes every group, requested length and fresh randomness', () => {
+  const passwords = new Set<string>();
+  for (let sample = 0; sample < 100; sample++) {
+    const generated = generatePassword(20);
+    assert.equal(generated.length, 20);
+    for (const group of [/[A-Z]/, /[a-z]/, /[2-9]/, /[!@#$%&*+\-= ?]/]) assert.match(generated, group);
+    assert.doesNotMatch(generated, /[IOl01]/);
+    passwords.add(generated);
+  }
+  assert.equal(passwords.size, 100);
+});
+
+test('password generator rejects lengths outside the supported range', () => {
+  for (const invalid of [0, 11, 65, 12.5, NaN]) assert.throws(() => generatePassword(invalid), /OUT_OF_RANGE/);
+  assert.equal(generatePassword(12).length, 12);
+  assert.equal(generatePassword(64).length, 64);
 });

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as admin from 'firebase-admin';
+import { PrismaService } from '../prisma/prisma.service';
 
 /**
  * Wraps Firebase Admin SDK for sending push notifications via FCM.
@@ -13,7 +14,7 @@ export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
   private messaging: admin.messaging.Messaging | null = null;
 
-  constructor(config: ConfigService) {
+  constructor(config: ConfigService, private readonly prisma: PrismaService) {
     const projectId = config.get<string>('FIREBASE_PROJECT_ID');
 
     if (!projectId) {
@@ -44,18 +45,15 @@ export class NotificationsService {
    * request creation (the caregiver can poll or use the fallback PIN flow).
    */
   async sendAccessRequest(params: {
-    fcmToken: string;
-    elderlyName: string;
-    vaultItemLabel: string;
+    userId: string;
     accessLogId: string;
   }): Promise<void> {
     if (!this.messaging) return;
 
-    const message: admin.messaging.Message = {
-      token: params.fcmToken,
+    const message: Omit<admin.messaging.TokenMessage, 'token'> = {
       notification: {
-        title: `${params.elderlyName} precisa da sua ajuda`,
-        body: `Solicitação de acesso: "${params.vaultItemLabel}". Toque para responder.`,
+        title: 'Pedido de acesso',
+        body: 'Ha uma solicitacao aguardando sua resposta.',
       },
       data: {
         type: 'ACCESS_REQUEST',
@@ -75,15 +73,7 @@ export class NotificationsService {
       },
     };
 
-    try {
-      const msgId = await this.messaging.send(message);
-      this.logger.debug(`FCM message sent: ${msgId}`);
-    } catch (error) {
-      this.logger.error(
-        `FCM push failed for token ${params.fcmToken.slice(0, 12)}...`,
-        error,
-      );
-    }
+    await this.send(params.userId, message);
   }
 
   /**
@@ -91,37 +81,50 @@ export class NotificationsService {
    * Serves as a fallback in case the WebSocket is unavailable.
    */
   async sendAccessResolved(params: {
-    fcmToken: string;
+    userId: string;
+    accessLogId: string;
     status: 'APPROVED' | 'DENIED' | 'EXPIRED';
-    vaultItemLabel: string;
   }): Promise<void> {
     if (!this.messaging) return;
 
     const map: Record<typeof params.status, { title: string; body: string }> = {
       APPROVED: {
-        title: 'Acesso autorizado ✓',
-        body: `"${params.vaultItemLabel}" foi liberado pelo seu familiar.`,
+        title: 'Solicitacao atualizada',
+        body: 'Abra o Senha Facil para consultar a resposta.',
       },
       DENIED: {
-        title: 'Acesso negado',
-        body: `"${params.vaultItemLabel}" foi recusado pelo seu familiar.`,
+        title: 'Solicitacao atualizada',
+        body: 'Abra o Senha Facil para consultar a resposta.',
       },
       EXPIRED: {
-        title: 'Solicitação expirada',
-        body: `A solicitação para "${params.vaultItemLabel}" não foi respondida a tempo.`,
+        title: 'Solicitacao atualizada',
+        body: 'Abra o Senha Facil para consultar a resposta.',
       },
     };
 
     const { title, body } = map[params.status];
 
-    try {
-      await this.messaging.send({
-        token: params.fcmToken,
+      await this.send(params.userId, {
         notification: { title, body },
-        data: { type: 'ACCESS_RESOLVED', status: params.status },
+        data: { type: 'ACCESS_RESOLVED', status: params.status, accessLogId: params.accessLogId },
       });
-    } catch (error) {
-      this.logger.error('FCM resolved notification failed', error);
-    }
+  }
+
+  private async send(userId: string, message: Omit<admin.messaging.TokenMessage, 'token'>): Promise<void> {
+    const messaging = this.messaging;
+    if (!messaging) return;
+    const sessions = await this.prisma.authSession.findMany({ where: { userId, revokedAt: null,
+      expiresAt: { gt: new Date() }, fcmToken: { not: null }, user: { isActive: true } }, select: { id: true, fcmToken: true } })
+      .catch(() => { this.logger.warn('Push session lookup failed.'); return []; });
+    await Promise.allSettled(sessions.map(async (session) => {
+      try { await messaging.send({ ...message, token: session.fcmToken! }); }
+      catch (error) {
+        const code = (error as { code?: string }).code;
+        if (code === 'messaging/registration-token-not-registered' || code === 'messaging/invalid-registration-token') {
+          await this.prisma.authSession.updateMany({ where: { id: session.id, fcmToken: session.fcmToken }, data: { fcmToken: null } });
+        }
+        this.logger.warn(`Push delivery failed: ${code ?? 'unknown'}`);
+      }
+    }));
   }
 }

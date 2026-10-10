@@ -1,8 +1,9 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Post, Req, UseGuards, Param, ForbiddenException } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AccessService } from './access.service';
 import { RequestAccessDto } from './dto/request-access.dto';
 import { RespondAccessDto } from './dto/respond-access.dto';
+import { EmergencyAccessDto } from './dto/emergency-access.dto';
 
 interface AuthRequest {
   user: { id: string; role: string };
@@ -25,6 +26,7 @@ export class AccessController {
   @Post('request')
   @HttpCode(HttpStatus.CREATED)
   requestAccess(@Req() req: AuthRequest, @Body() dto: RequestAccessDto) {
+    if (req.user.role !== 'ELDERLY') throw new ForbiddenException();
     return this.accessService.requestAccess(req.user.id, dto);
   }
 
@@ -38,6 +40,7 @@ export class AccessController {
   @Post('respond')
   @HttpCode(HttpStatus.OK)
   respondToAccess(@Req() req: AuthRequest, @Body() dto: RespondAccessDto) {
+    if (req.user.role !== 'CAREGIVER') throw new ForbiddenException();
     return this.accessService.respondToAccess(req.user.id, dto);
   }
 
@@ -50,6 +53,21 @@ export class AccessController {
    */
   @Get('pending')
   findPending(@Req() req: AuthRequest) {
+    if (req.user.role !== 'CAREGIVER') throw new ForbiddenException();
     return this.accessService.findPendingForCaregiver(req.user.id);
+  }
+
+  @Get('history')
+  history(@Req() req: AuthRequest) { return this.accessService.history(req.user.id); }
+
+  @Post('emergency')
+  emergency(@Req() req: AuthRequest, @Body() dto: EmergencyAccessDto) {
+    if (req.user.role !== 'ELDERLY') throw new ForbiddenException();
+    return this.accessService.recordEmergency(req.user.id, dto);
+  }
+
+  @Get(':id')
+  state(@Req() req: AuthRequest, @Param('id') id: string) {
+    return this.accessService.findState(req.user.id, id);
   }
 }

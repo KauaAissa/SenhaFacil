@@ -21,6 +21,8 @@ export default function ElderlyLayout() {
     >
       <Tabs.Screen name="vault" options={{ title: 'Meu Cofre' }} />
       <Tabs.Screen name="contacts" options={{ title: 'Familiares' }} />
+      <Tabs.Screen name="history" options={{ title: 'Historico' }} />
+      <Tabs.Screen name="profile" options={{ title: 'Conta' }} />
     </Tabs>
   );
 }

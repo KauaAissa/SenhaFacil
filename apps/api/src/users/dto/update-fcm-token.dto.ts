@@ -1,8 +1,10 @@
-import { IsString, MinLength } from 'class-validator';
+import { IsString, MinLength, MaxLength, ValidateIf } from 'class-validator';
 
 export class UpdateFcmTokenDto {
   /** Token FCM atual do dispositivo, obtido via expo-notifications. */
   @IsString()
+  @ValidateIf((_object, value) => value !== null)
   @MinLength(10)
-  fcmToken: string;
+  @MaxLength(4096)
+  fcmToken: string | null;
 }

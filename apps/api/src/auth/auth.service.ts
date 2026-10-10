@@ -1,9 +1,12 @@
 import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import type { RegisterDto } from './dto/register.dto';
 import type { LoginDto } from './dto/login.dto';
+import { Cron } from '@nestjs/schedule';
 
 /** Argon2id parameters — OWASP 2023 recommendation for interactive logins */
 const ARGON2_OPTIONS = {
@@ -28,8 +31,9 @@ export class AuthService {
   ) {}
 
   async register(dto: RegisterDto) {
-    const exists = await this.prisma.user.findUnique({
-      where: { email: dto.email },
+    const email = dto.email.trim().toLowerCase();
+    const exists = await this.prisma.user.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' } },
       select: { id: true },
     });
 
@@ -42,24 +46,29 @@ export class AuthService {
     const user = await this.prisma.user.create({
       data: {
         name: dto.name,
-        email: dto.email,
-        phone: dto.phone,
+        email,
+        phone: dto.phone?.trim() || undefined,
         passwordHash,
         kdfSalt: dto.kdfSalt,
         role: dto.role ?? 'ELDERLY',
       },
       select: { id: true, email: true, name: true, role: true, kdfSalt: true },
+    }).catch((error) => {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('E-mail ou telefone ja cadastrado.');
+      }
+      throw error;
     });
 
     return {
-      accessToken: this.signToken(user.id, user.email, user.role),
+      ...(await this.createSession(user)),
       user,
     };
   }
 
   async login(dto: LoginDto) {
-    const user = await this.prisma.user.findUnique({
-      where: { email: dto.email },
+    const user = await this.prisma.user.findFirst({
+      where: { email: { equals: dto.email.trim().toLowerCase(), mode: 'insensitive' } },
       select: {
         id: true,
         email: true,
@@ -80,16 +89,55 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { passwordHash: _removed, ...safeUser } = user;
+    const safeUser = { id: user.id, email: user.email, name: user.name, role: user.role, kdfSalt: user.kdfSalt };
 
     return {
-      accessToken: this.signToken(user.id, user.email, user.role),
+      ...(await this.createSession(user)),
       user: safeUser,
     };
   }
 
-  private signToken(userId: string, email: string, role: string): string {
-    return this.jwt.sign({ sub: userId, email, role });
+  private async createSession(user: { id: string; email: string; role: string }) {
+    const sessionId = randomUUID();
+    const refreshToken = randomBytes(32).toString('base64url');
+    await this.prisma.authSession.create({ data: {
+      id: sessionId, userId: user.id, refreshHash: hashToken(refreshToken),
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60_000),
+    } });
+    return { accessToken: this.jwt.sign({ sub: user.id, email: user.email, role: user.role, sid: sessionId }), refreshToken };
+  }
+
+  async refresh(refreshToken: string) {
+    const hash = hashToken(refreshToken);
+    return this.prisma.serializable(async (transaction) => {
+      const session = await transaction.authSession.findUnique({ where: { refreshHash: hash }, include: { user: true } });
+      if (!session || session.revokedAt || session.expiresAt <= new Date() || !session.user.isActive) {
+        throw new UnauthorizedException('Sessao expirada. Entre novamente.');
+      }
+      const rotated = randomBytes(32).toString('base64url');
+      const result = await transaction.authSession.updateMany({
+        where: { id: session.id, refreshHash: hash, revokedAt: null, expiresAt: { gt: new Date() } },
+        data: { refreshHash: hashToken(rotated) },
+      });
+      if (result.count !== 1) throw new UnauthorizedException('Token de renovacao ja utilizado.');
+      return { refreshToken: rotated, accessToken: this.jwt.sign({ sub: session.userId,
+        email: session.user.email, role: session.user.role, sid: session.id }) };
+    });
+  }
+
+  async logout(refreshToken: string): Promise<void> {
+    await this.prisma.authSession.updateMany({ where: { refreshHash: hashToken(refreshToken), revokedAt: null },
+      data: { revokedAt: new Date(), fcmToken: null } });
+  }
+
+  @Cron('0 0 3 * * *')
+  async cleanExpiredData(): Promise<void> {
+    const now = new Date();
+    await this.prisma.authSession.deleteMany({ where: { OR: [{ expiresAt: { lte: now } },
+      { revokedAt: { lte: new Date(now.getTime() - 30 * 24 * 60 * 60_000) } }] } });
+    await this.prisma.accessLog.deleteMany({ where: { status: { not: 'PENDING' },
+      requestedAt: { lt: new Date(now.getTime() - 365 * 24 * 60 * 60_000) } } });
   }
 }
+
+function hashToken(token: string): string { return createHash('sha256').update(token).digest('hex'); }

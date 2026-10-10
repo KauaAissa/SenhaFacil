@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Alert, ActivityIndicator } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { Screen } from '../../../components/ui/Screen';
 import { AccessibleText } from '../../../components/ui/AccessibleText';
 import { AccessibleButton } from '../../../components/ui/AccessibleButton';
 import { AccessibleCard } from '../../../components/ui/AccessibleCard';
+import { AccessibleTextInput } from '../../../components/ui/AccessibleTextInput';
+import { useAuthStore } from '../../../stores/auth.store';
 import { vaultService } from '../../../services/vault.service';
 import { accessApiService } from '../../../services/access-api.service';
 import { accessSocketService } from '../../../services/access-socket.service';
 import { connectivityService } from '../../../services/connectivity.service';
-import type { DecryptedVaultItem } from '../../../services/offline-vault.service';
+import { sensitiveClipboard } from '../../../services/clipboard.service';
+import type { DecryptedVaultItem, LocalVaultItem } from '../../../services/offline-vault.service';
 import { colors, spacing } from '../../../theme/theme';
 
 type GateState =
@@ -27,45 +30,123 @@ export default function VaultItemDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
 
-  const [item, setItem] = useState<DecryptedVaultItem | null>(null);
+  const [item, setItem] = useState<LocalVaultItem | null>(null);
+  const [revealed, setRevealed] = useState<DecryptedVaultItem | null>(null);
   const [gate, setGate] = useState<GateState>('loading');
   const [expiresAt, setExpiresAt] = useState<Date | null>(null);
   const [usedFallback, setUsedFallback] = useState(false);
+  const [emergencyPassword, setEmergencyPassword] = useState('');
+  const [notes, setNotes] = useState<string | null>(null);
+  const alive = useRef(false);
+  const focusGeneration = useRef(0);
   const accessLogIdRef = useRef<string | null>(null);
 
   const loadItem = useCallback(async () => {
-    const items = await vaultService.getAllItems();
-    const found = items.find((i) => i.id === id) ?? null;
+    const generation = focusGeneration.current;
+    const current = () => alive.current && focusGeneration.current === generation;
+    const found = await vaultService.getItem(id);
+    if (!current()) return;
     setItem(found);
+    setRevealed(null);
+    if (found && !found.requiresApproval) {
+      const value = await vaultService.revealItem(found.id);
+      if (!current()) return;
+      setRevealed(value);
+    }
     setGate(!found ? 'not-found' : found.requiresApproval ? 'locked' : 'revealed');
+    if (found?.requiresApproval && connectivityService.isOnline) {
+      const history = await accessApiService.history();
+      if (!current()) return;
+      const pending = history.find((entry) => entry.vaultItem.id === found.id &&
+        ['PENDING', 'APPROVED'].includes(entry.status) && new Date(entry.expiresAt).getTime() > Date.now());
+      if (pending) {
+        accessLogIdRef.current = pending.id;
+        setExpiresAt(new Date(pending.expiresAt));
+        if (pending.status === 'APPROVED') {
+          const value = await vaultService.revealItem(found.id, pending.id);
+          if (current()) { setRevealed(value); setGate('revealed'); }
+        } else setGate('waiting');
+      }
+    }
   }, [id]);
 
+  useFocusEffect(useCallback(() => {
+    const generation = ++focusGeneration.current;
+    alive.current = true;
+    setRevealed(null); setUsedFallback(false); setExpiresAt(null); setNotes(null);
+    accessLogIdRef.current = null;
+    void loadItem().catch((error) => {
+      if (alive.current && focusGeneration.current === generation) {
+        setGate('locked');
+        Alert.alert('Nao foi possivel abrir a senha', error instanceof Error ? error.message : 'Tente novamente.');
+      }
+    });
+    return () => { alive.current = false; ++focusGeneration.current; setRevealed(null); setEmergencyPassword(''); void sensitiveClipboard.clear().catch(() => undefined); };
+  }, [loadItem]));
+
   useEffect(() => {
-    void loadItem();
-  }, [loadItem]);
+    if (!expiresAt || !['waiting', 'revealed'].includes(gate) || usedFallback) return;
+    const timeout = setTimeout(() => { setRevealed(null); setGate('expired'); void sensitiveClipboard.clear().catch(() => undefined); }, Math.max(0, expiresAt.getTime() - Date.now()));
+    return () => clearTimeout(timeout);
+  }, [expiresAt, gate, usedFallback]);
+
+  useEffect(() => {
+    if (gate !== 'waiting') return;
+    async function reconcile() {
+      const generation = focusGeneration.current;
+      const requestId = accessLogIdRef.current;
+      if (!requestId || !connectivityService.isOnline) return;
+      try {
+        const state = await accessApiService.state(requestId);
+        if (!alive.current || focusGeneration.current !== generation) return;
+        setNotes(state.notes);
+        if (state.status === 'APPROVED') {
+          const value = await vaultService.revealItem(id, requestId);
+          if (alive.current && focusGeneration.current === generation) { setRevealed(value); setGate('revealed'); }
+        } else if (state.status === 'DENIED' || state.status === 'EXPIRED') {
+          setRevealed(null); setGate(state.status === 'DENIED' ? 'denied' : 'expired');
+          void sensitiveClipboard.clear().catch(() => undefined);
+        }
+      } catch {}
+    }
+    void reconcile();
+    const interval = setInterval(() => void reconcile(), 3_000);
+    return () => clearInterval(interval);
+  }, [gate, id]);
 
   // Listen for real-time resolution while a request is pending.
   useEffect(() => {
     const unsubscribe = accessSocketService.onAccessResolved((event) => {
-      if (event.accessLogId !== accessLogIdRef.current) return;
+      if (!alive.current || event.accessLogId !== accessLogIdRef.current) return;
+      const generation = focusGeneration.current;
+      setNotes(event.notes);
 
-      if (event.status === 'APPROVED') setGate('revealed');
-      else if (event.status === 'DENIED') setGate('denied');
-      else if (event.status === 'EXPIRED') setGate('expired');
+      if (event.status === 'APPROVED' && id) {
+        void vaultService.revealItem(id, event.accessLogId).then((value) => { if (alive.current && focusGeneration.current === generation) { setRevealed(value); setGate('revealed'); } })
+          .catch(() => { if (alive.current && focusGeneration.current === generation) setGate('expired'); });
+      }
+      else if (event.status === 'DENIED' || event.status === 'EXPIRED') {
+        setRevealed(null); setGate(event.status === 'DENIED' ? 'denied' : 'expired');
+        void sensitiveClipboard.clear().catch(() => undefined);
+      }
     });
     return unsubscribe;
-  }, []);
+  }, [id]);
 
   async function handleRequestAccess() {
     if (!item) return;
+    const generation = focusGeneration.current;
+    if (!connectivityService.isOnline) { setGate('offline-fallback'); return; }
     setGate('requesting');
 
     try {
       const result = await accessApiService.requestAccess(item.id);
+      if (!alive.current || generation !== focusGeneration.current) return;
       accessLogIdRef.current = result.accessLogId;
       setExpiresAt(new Date(result.expiresAt));
       setGate('waiting');
     } catch (err) {
+      if (!alive.current || generation !== focusGeneration.current) return;
       if (!connectivityService.isOnline) {
         setGate('offline-fallback');
       } else {
@@ -75,7 +156,9 @@ export default function VaultItemDetailScreen() {
     }
   }
 
-  function handleEmergencyReveal() {
+  function handleEmergencyReveal(withPassword: boolean) {
+    const password = emergencyPassword;
+    setEmergencyPassword('');
     Alert.alert(
       'Modo de emergência',
       'Você está sem conexão. Deseja revelar esta senha mesmo assim? Isso ficará registrado para seu familiar quando a conexão voltar.',
@@ -84,9 +167,19 @@ export default function VaultItemDetailScreen() {
         {
           text: 'Revelar mesmo assim',
           style: 'destructive',
-          onPress: () => {
-            setUsedFallback(true);
-            setGate('revealed');
+          onPress: async () => {
+            const generation = focusGeneration.current;
+            if (!alive.current) return;
+            try {
+              const value = await vaultService.revealEmergency(id,
+                () => useAuthStore.getState().reauthenticate(withPassword ? password : undefined));
+              if (!alive.current || generation !== focusGeneration.current) return;
+              setRevealed(value);
+              setUsedFallback(true);
+              setGate('revealed');
+            } catch (error) {
+              Alert.alert('Emergencia nao liberada', error instanceof Error ? error.message : 'Tente novamente.');
+            }
           },
         },
       ],
@@ -105,6 +198,17 @@ export default function VaultItemDetailScreen() {
           router.back();
         },
       },
+    ]);
+  }
+
+  function handleCopy() {
+    const generation = focusGeneration.current;
+    Alert.alert('Copiar senha', 'A senha ficara disponivel para colar em outro aplicativo por ate 30 segundos.', [
+      { text: 'Cancelar', style: 'cancel' }, { text: 'Copiar', onPress: async () => {
+        if (!alive.current || generation !== focusGeneration.current || !revealed || (expiresAt && !usedFallback && expiresAt.getTime() <= Date.now())) return;
+        try { await sensitiveClipboard.copy(revealed.plaintext.password); Alert.alert('Senha copiada.'); }
+        catch { Alert.alert('Nao foi possivel copiar.'); }
+      } },
     ]);
   }
 
@@ -164,6 +268,7 @@ export default function VaultItemDetailScreen() {
           <AccessibleText variant="body" bold color={colors.danger}>
             O familiar negou este acesso.
           </AccessibleText>
+          {notes && <AccessibleText variant="body">{notes}</AccessibleText>}
           <View style={{ marginTop: spacing.md }}>
             <AccessibleButton label="Tentar novamente" onPress={() => setGate('locked')} />
           </View>
@@ -189,11 +294,13 @@ export default function VaultItemDetailScreen() {
           <AccessibleText variant="body" style={{ marginVertical: spacing.sm }}>
             Não foi possível notificar seu familiar agora. Você pode usar o acesso de emergência.
           </AccessibleText>
-          <AccessibleButton label="Acesso de emergência" variant="danger" onPress={handleEmergencyReveal} />
+          <AccessibleTextInput label="Senha mestra" value={emergencyPassword} onChangeText={setEmergencyPassword} secureTextEntry />
+          <AccessibleButton label="Emergencia com senha mestra" variant="danger" disabled={!emergencyPassword} onPress={() => handleEmergencyReveal(true)} />
+          <AccessibleButton label="Emergencia com biometria" variant="danger" onPress={() => handleEmergencyReveal(false)} />
         </AccessibleCard>
       )}
 
-      {gate === 'revealed' && (
+      {gate === 'revealed' && revealed && (
         <>
           {usedFallback && (
             <AccessibleCard highlight>
@@ -203,13 +310,18 @@ export default function VaultItemDetailScreen() {
             </AccessibleCard>
           )}
           <AccessibleCard>
-            {item.plaintext.login && (
-              <Field label="Login" value={item.plaintext.login} />
+            {revealed.plaintext.login && (
+              <Field label="Login" value={revealed.plaintext.login} />
             )}
-            <Field label="Senha" value={item.plaintext.password} />
-            {item.plaintext.url && <Field label="Site" value={item.plaintext.url} />}
-            {item.plaintext.notes && <Field label="Observações" value={item.plaintext.notes} />}
+            <Field label="Senha" value={revealed.plaintext.password} />
+            {revealed.plaintext.url && <Field label="Site" value={revealed.plaintext.url} />}
+            {revealed.plaintext.notes && <Field label="Observações" value={revealed.plaintext.notes} />}
           </AccessibleCard>
+          <AccessibleButton label="Copiar senha" icon="copy-outline" onPress={handleCopy} />
+          <AccessibleButton label="Editar senha" icon="create-outline" variant="secondary"
+            onPress={() => router.push({ pathname: '/(elderly)/vault/edit', params: { id: item.id, accessLogId: accessLogIdRef.current ?? '' } })} />
+          <AccessibleButton label={item.isFavorite ? 'Remover dos favoritos' : 'Adicionar aos favoritos'} icon={item.isFavorite ? 'star' : 'star-outline'} variant="secondary"
+            onPress={async () => { await vaultService.setFavorite(item.id, !item.isFavorite); setItem({ ...item, isFavorite: !item.isFavorite }); }} />
           <AccessibleButton label="Excluir senha" variant="danger" onPress={handleDelete} />
         </>
       )}

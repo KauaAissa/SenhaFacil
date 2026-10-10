@@ -13,6 +13,7 @@ export default function VaultStackLayout() {
       <Stack.Screen name="index" options={{ title: 'Meu Cofre' }} />
       <Stack.Screen name="new" options={{ title: 'Nova Senha' }} />
       <Stack.Screen name="[id]" options={{ title: 'Detalhes' }} />
+      <Stack.Screen name="edit" options={{ title: 'Editar senha' }} />
     </Stack>
   );
 }

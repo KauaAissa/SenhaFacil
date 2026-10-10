@@ -1,6 +1,7 @@
 import { randomUUID } from 'expo-crypto';
 import type { VaultItemPlaintext } from '@senha-facil/crypto';
-import { offlineVaultService, type DecryptedVaultItem } from './offline-vault.service';
+import { offlineVaultService, type DecryptedVaultItem, type LocalVaultItem } from './offline-vault.service';
+import { apiClient } from './api.client';
 import { syncService } from './sync.service';
 import { connectivityService } from './connectivity.service';
 
@@ -43,7 +44,8 @@ class VaultService {
   }
 
   /** Re-encrypts (fresh IV) and updates an existing item, then opportunistically syncs. */
-  async updateItem(id: string, input: VaultItemInput): Promise<void> {
+  async updateItem(id: string, input: VaultItemInput, accessLogId?: string): Promise<void> {
+    await this.revealItem(id, accessLogId);
     await offlineVaultService.saveItem(id, input.label, input.category, input.plaintext, {
       requiresApproval: input.requiresApproval,
       isFavorite: input.isFavorite,
@@ -58,8 +60,44 @@ class VaultService {
     this.triggerBackgroundSync();
   }
 
-  async getAllItems(): Promise<DecryptedVaultItem[]> {
+  async setFavorite(id: string, favorite: boolean): Promise<void> {
+    await offlineVaultService.setFavorite(id, favorite);
+    this.triggerBackgroundSync();
+  }
+
+  async getAllItems(): Promise<LocalVaultItem[]> {
     return offlineVaultService.getAllItems();
+  }
+
+  async getItem(id: string): Promise<LocalVaultItem | null> {
+    return offlineVaultService.getItem(id);
+  }
+
+  async revealItem(id: string, accessLogId?: string): Promise<DecryptedVaultItem> {
+    const accountId = offlineVaultService.accountId;
+    let item = await offlineVaultService.getItem(id);
+    if (!item) throw new Error('Senha nao encontrada.');
+    if (item.requiresApproval) {
+      if (!accessLogId) throw new Error('A aprovacao do familiar e necessaria.');
+      const grant = await apiClient.get<{ status: string; vaultItemId: string; expiresAt: string }>(`/access/${accessLogId}`);
+      item = await offlineVaultService.getItem(id);
+      if (!item || grant.status !== 'APPROVED' || grant.vaultItemId !== item.id || new Date(grant.expiresAt).getTime() <= Date.now()) {
+        throw new Error('Aprovacao ausente ou expirada.');
+      }
+    }
+    if (accountId !== offlineVaultService.accountId) throw new Error('SESSION_CHANGED');
+    return offlineVaultService.decryptItem(item);
+  }
+
+  async revealEmergency(id: string, authenticate: () => Promise<void>): Promise<DecryptedVaultItem> {
+    if (connectivityService.isOnline) throw new Error('Use a aprovacao do familiar enquanto houver conexao.');
+    const account = offlineVaultService.accountId;
+    await authenticate();
+    if (account !== offlineVaultService.accountId || connectivityService.isOnline) throw new Error('A sessao ou a conexao mudou.');
+    const item = await offlineVaultService.getItem(id);
+    if (!item) throw new Error('Senha nao encontrada.');
+    await offlineVaultService.recordEmergency(id);
+    return offlineVaultService.decryptItem(item);
   }
 
   /** Fire-and-forget sync — never blocks the UI write path. */

@@ -1,5 +1,6 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { apiClient } from './api.client';
 
 Notifications.setNotificationHandler({
@@ -23,6 +24,7 @@ Notifications.setNotificationHandler({
  * (caregiver) as fallbacks.
  */
 export async function registerPushToken(): Promise<void> {
+  if (Platform.OS !== 'android' || Constants.executionEnvironment === ExecutionEnvironment.StoreClient) return;
   try {
     if (Platform.OS === 'android') {
       await Notifications.setNotificationChannelAsync('sf_access_requests', {
@@ -46,7 +48,13 @@ export async function registerPushToken(): Promise<void> {
     if (!token) return;
 
     await apiClient.patch('/users/me/fcm-token', { fcmToken: token });
-  } catch (error) {
-    console.warn('[NotificationsService] Failed to register push token:', error);
+  } catch {
+    console.warn('[NotificationsService] Push registration unavailable.');
   }
+}
+
+export function listenPushTokenChanges(): () => void {
+  if (Platform.OS !== 'android' || Constants.executionEnvironment === ExecutionEnvironment.StoreClient) return () => undefined;
+  const subscription = Notifications.addPushTokenListener(() => { void registerPushToken(); });
+  return () => subscription.remove();
 }

@@ -32,11 +32,11 @@ export class ContactsService {
    */
   async invite(elderlyId: string, dto: InviteContactDto) {
     const caregiver = await this.prisma.user.findUnique({
-      where: { email: dto.caregiverEmail },
-      select: { id: true, role: true },
+      where: { email: dto.caregiverEmail.trim().toLowerCase() },
+      select: { id: true, role: true, isActive: true },
     });
 
-    if (!caregiver) {
+    if (!caregiver || !caregiver.isActive) {
       throw new NotFoundException('No account found with this email');
     }
 
@@ -95,7 +95,7 @@ export class ContactsService {
     }
 
     return this.prisma.trustedContact.update({
-      where: { id: contactId },
+      where: { id: contactId, caregiverId, status: 'PENDING' },
       data: { status: 'ACTIVE' },
       select: CONTACT_SELECT,
     });
@@ -134,6 +134,9 @@ export class ContactsService {
 
   /** Only the elderly user (owner of the vault) can grant/revoke permissions. */
   async updatePermissions(elderlyId: string, contactId: string, dto: UpdatePermissionsDto) {
+    if (dto.permissions.includes('MANAGE_ITEMS' as never)) {
+      throw new BadRequestException('Familiares nao podem criar ou editar senhas do cofre.');
+    }
     const contact = await this.prisma.trustedContact.findFirst({
       where: { id: contactId, elderlyId },
       select: { id: true, status: true },
@@ -146,7 +149,7 @@ export class ContactsService {
     }
 
     return this.prisma.trustedContact.update({
-      where: { id: contactId },
+      where: { id: contactId, elderlyId, status: 'ACTIVE' },
       data: { permissions: dto.permissions },
       select: CONTACT_SELECT,
     });

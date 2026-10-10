@@ -2,6 +2,12 @@ import { apiClient } from './api.client';
 
 export type AccessStatus = 'PENDING' | 'APPROVED' | 'DENIED' | 'EXPIRED' | 'FALLBACK_GRANTED';
 
+export function parseAccessNotification(data: Record<string, unknown>): { accessLogId: string; type: 'ACCESS_REQUEST' | 'ACCESS_RESOLVED' } | null {
+  if (typeof data.accessLogId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(data.accessLogId)) return null;
+  if (data.type !== 'ACCESS_REQUEST' && data.type !== 'ACCESS_RESOLVED') return null;
+  return { accessLogId: data.accessLogId, type: data.type };
+}
+
 export interface AccessRequestResult {
   accessLogId: string;
   status: AccessStatus;
@@ -15,6 +21,13 @@ export interface PendingAccessRequest {
   expiresAt: string;
   requester: { id: string; name: string };
   vaultItem: { id: string; label: string; category: string };
+}
+
+export interface AccessHistoryEntry extends PendingAccessRequest {
+  resolvedAt: string | null;
+  fallbackUsed: boolean;
+  notes: string | null;
+  approver: { name: string } | null;
 }
 
 /**
@@ -38,6 +51,12 @@ class AccessApiService {
   /** Fallback list for the caregiver app when a push notification is missed. */
   findPending(): Promise<PendingAccessRequest[]> {
     return apiClient.get<PendingAccessRequest[]>('/access/pending');
+  }
+
+  history(): Promise<AccessHistoryEntry[]> { return apiClient.get('/access/history'); }
+
+  state(id: string): Promise<{ id: string; vaultItemId: string; status: AccessStatus; expiresAt: string; notes: string | null }> {
+    return apiClient.get(`/access/${id}`);
   }
 }
 

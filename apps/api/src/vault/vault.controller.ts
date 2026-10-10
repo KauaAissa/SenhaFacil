@@ -59,6 +59,11 @@ export class VaultController {
     return this.vaultService.sync(req.user.id, dto);
   }
 
+  @Get('sync')
+  syncState(@Req() req: AuthRequest) {
+    return this.vaultService.findSyncState(req.user.id);
+  }
+
   /**
    * PATCH /vault/:id
    * Partially updates a vault item. Ownership is strictly verified.

@@ -1,5 +1,6 @@
 import {
   Body,
+  ForbiddenException,
   Controller,
   Get,
   HttpCode,
@@ -32,6 +33,7 @@ export class ContactsController {
   @Post('invite')
   @HttpCode(HttpStatus.CREATED)
   invite(@Req() req: AuthRequest, @Body() dto: InviteContactDto) {
+    if (req.user.role !== 'ELDERLY') throw new ForbiddenException();
     return this.contactsService.invite(req.user.id, dto);
   }
 
@@ -42,6 +44,7 @@ export class ContactsController {
   @Post(':id/accept')
   @HttpCode(HttpStatus.OK)
   accept(@Req() req: AuthRequest, @Param('id') id: string) {
+    if (req.user.role !== 'CAREGIVER') throw new ForbiddenException();
     return this.contactsService.accept(req.user.id, id);
   }
 
@@ -65,6 +68,7 @@ export class ContactsController {
     @Param('id') id: string,
     @Body() dto: UpdatePermissionsDto,
   ) {
+    if (req.user.role !== 'ELDERLY') throw new ForbiddenException();
     return this.contactsService.updatePermissions(req.user.id, id, dto);
   }
 

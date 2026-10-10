@@ -1,6 +1,7 @@
 import { View, TextInput, StyleSheet, type TextInputProps } from 'react-native';
 import { AccessibleText } from './AccessibleText';
 import { colors, fontSizes, spacing, touchTarget } from '../../theme/theme';
+import { useAccessibilityStore } from '../../stores/accessibility.store';
 
 interface AccessibleTextInputProps extends TextInputProps {
   label: string;
@@ -18,13 +19,14 @@ export function AccessibleTextInput({
   style,
   ...rest
 }: AccessibleTextInputProps) {
+  const { textScale, highContrast } = useAccessibilityStore();
   return (
     <View style={styles.wrapper}>
       <AccessibleText variant="body" bold>
         {label}
       </AccessibleText>
       <TextInput
-        style={[styles.input, Boolean(errorMessage) && styles.inputError, style]}
+        style={[styles.input, { fontSize: fontSizes.bodyLarge * textScale }, highContrast && { borderColor: '#000000' }, Boolean(errorMessage) && styles.inputError, style]}
         placeholderTextColor={colors.textSecondary}
         accessibilityLabel={label}
         {...rest}
@@ -43,7 +45,7 @@ const styles = StyleSheet.create({
   input: {
     minHeight: touchTarget.minHeight,
     borderWidth: 2,
-    borderColor: colors.border,
+    borderColor: colors.textSecondary,
     borderRadius: touchTarget.borderRadius,
     paddingHorizontal: spacing.md,
     fontSize: fontSizes.bodyLarge,

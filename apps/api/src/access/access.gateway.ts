@@ -8,9 +8,12 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { Server, Socket } from 'socket.io';
+import { PrismaService } from '../prisma/prisma.service';
 
 interface AuthenticatedSocket extends Socket {
   userId?: string;
+  expirationTimer?: ReturnType<typeof setTimeout>;
+  sessionTimer?: ReturnType<typeof setInterval>;
 }
 
 /**
@@ -46,6 +49,7 @@ export class AccessGateway implements OnGatewayConnection, OnGatewayDisconnect {
   constructor(
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
+    private readonly prisma: PrismaService,
   ) {}
 
   async handleConnection(client: AuthenticatedSocket): Promise<void> {
@@ -57,14 +61,24 @@ export class AccessGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       if (!raw) throw new Error('Missing token');
 
-      const payload = this.jwt.verify<{ sub: string }>(raw, {
+      const payload = this.jwt.verify<{ sub: string; sid: string; exp: number }>(raw, {
         secret: this.config.getOrThrow<string>('JWT_SECRET'),
       });
+      if (!payload.sid || !payload.exp) throw new Error('Invalid session');
+      const active = async () => this.prisma.authSession.findFirst({
+        where: { id: payload.sid, userId: payload.sub, revokedAt: null,
+          expiresAt: { gt: new Date() }, user: { isActive: true } }, select: { id: true },
+      });
+      if (!(await active())) throw new Error('Session revoked');
 
       client.userId = payload.sub;
 
       // Each user gets a private room — events are delivered only to their devices
       await client.join(`user:${payload.sub}`);
+      client.expirationTimer = setTimeout(() => client.disconnect(true), Math.max(0, payload.exp * 1000 - Date.now()));
+      client.sessionTimer = setInterval(() => {
+        void active().then((session) => { if (!session) client.disconnect(true); }).catch(() => client.disconnect(true));
+      }, 30_000);
       this.logger.log(`WS connected  userId=${payload.sub}  socketId=${client.id}`);
     } catch {
       this.logger.warn(`WS rejected unauthenticated connection  socketId=${client.id}`);
@@ -73,6 +87,8 @@ export class AccessGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   handleDisconnect(client: AuthenticatedSocket): void {
+    if (client.expirationTimer) clearTimeout(client.expirationTimer);
+    if (client.sessionTimer) clearInterval(client.sessionTimer);
     if (client.userId) {
       this.logger.log(`WS disconnected  userId=${client.userId}  socketId=${client.id}`);
     }

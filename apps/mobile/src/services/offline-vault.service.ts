@@ -1,6 +1,7 @@
 import * as SQLite from 'expo-sqlite';
 import { encryptVaultItem, decryptVaultItem } from '@senha-facil/crypto';
-import type { EncryptedPayload, VaultItemPlaintext } from '@senha-facil/crypto';
+import { randomUUID } from 'expo-crypto';
+import type { VaultItemPlaintext } from '@senha-facil/crypto';
 import { vaultCryptoService } from './vault-crypto.service';
 
 // Mirrors the Prisma VaultCategory enum
@@ -23,6 +24,11 @@ export interface LocalVaultItem {
   isFavorite: boolean;
   /** false = pending upload to server; true = confirmed synced */
   synced: boolean;
+  version: number;
+  operationId: string;
+  deleted: boolean;
+  conflict: boolean;
+  serverDeleted: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -31,7 +37,20 @@ export interface DecryptedVaultItem extends LocalVaultItem {
   plaintext: VaultItemPlaintext;
 }
 
-const DB_NAME = 'senha_facil_vault.db';
+interface Row {
+  id: string; label: string; category: VaultCategory; encrypted_payload: string; iv: string;
+  requires_approval: number; is_favorite: number; synced: number;
+  created_at: string; updated_at: string; version: number; operation_id: string;
+  deleted: number; conflict: number; remote_deleted: number;
+}
+
+function fromRow(row: Row): LocalVaultItem {
+  return { id: row.id, label: row.label, category: row.category,
+    encryptedPayload: row.encrypted_payload, iv: row.iv,
+    requiresApproval: Boolean(row.requires_approval), isFavorite: Boolean(row.is_favorite),
+    synced: Boolean(row.synced), createdAt: row.created_at, updatedAt: row.updated_at,
+    version: row.version, operationId: row.operation_id, deleted: Boolean(row.deleted), conflict: Boolean(row.conflict), serverDeleted: Boolean(row.remote_deleted) };
+}
 
 /**
  * Local SQLite vault for offline-first access to encrypted vault items.
@@ -46,11 +65,16 @@ const DB_NAME = 'senha_facil_vault.db';
  *   - `synced = 1`  → item is confirmed to be in sync with the server
  *   - replaceWithServerData() performs a full replace after a successful pull
  */
-class OfflineVaultService {
+export class OfflineVaultService {
   private db: SQLite.SQLiteDatabase | null = null;
+  private ownerId: string | null = null;
 
-  async initialize(): Promise<void> {
-    this.db = await SQLite.openDatabaseAsync(DB_NAME);
+  async initialize(ownerId: string): Promise<void> {
+    if (!/^[a-zA-Z0-9_-]+$/.test(ownerId)) throw new Error('INVALID_ACCOUNT_ID');
+    if (this.ownerId === ownerId && this.db) return;
+    await this.close();
+    this.db = await SQLite.openDatabaseAsync(`senha_facil_${ownerId}.db`);
+    this.ownerId = ownerId;
 
     await this.db.execAsync(`
       PRAGMA journal_mode = WAL;
@@ -70,7 +94,75 @@ class OfflineVaultService {
 
       CREATE INDEX IF NOT EXISTS idx_vault_synced
         ON vault_items (synced);
+
+      CREATE TABLE IF NOT EXISTS emergency_events (
+        id TEXT PRIMARY KEY, vault_item_id TEXT NOT NULL, occurred_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS item_aliases (
+        old_id TEXT PRIMARY KEY, new_id TEXT NOT NULL
+      );
     `);
+    const columns = await this.db.getAllAsync<{ name: string }>('PRAGMA table_info(vault_items)');
+    for (const [name, definition] of Object.entries({
+      version: 'INTEGER NOT NULL DEFAULT 0', operation_id: "TEXT NOT NULL DEFAULT ''",
+      deleted: 'INTEGER NOT NULL DEFAULT 0', conflict: 'INTEGER NOT NULL DEFAULT 0',
+      remote_deleted: 'INTEGER NOT NULL DEFAULT 0',
+    })) {
+      if (!columns.some((column) => column.name === name)) await this.db.execAsync(`ALTER TABLE vault_items ADD COLUMN ${name} ${definition}`);
+    }
+    const missingIds = await this.db.getAllAsync<{ id: string }>("SELECT id FROM vault_items WHERE operation_id = ''");
+    for (const item of missingIds) await this.db.runAsync('UPDATE vault_items SET operation_id = ? WHERE id = ?', [randomUUID(), item.id]);
+    await this.importLegacy();
+  }
+
+  private async importLegacy(): Promise<void> {
+    if (!vaultCryptoService.isLoaded) return;
+    const database = this.database;
+    const key = vaultCryptoService.key;
+    const legacy = await SQLite.openDatabaseAsync('senha_facil_vault.db');
+    try {
+      const table = await legacy.getFirstAsync("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'vault_items'");
+      if (!table) return;
+      const rows = await legacy.getAllAsync<Row>('SELECT * FROM vault_items');
+      for (const row of rows) {
+        if (await database.getFirstAsync('SELECT old_id FROM item_aliases WHERE old_id = ?', [row.id])) continue;
+        try { await decryptVaultItem({ ciphertext: row.encrypted_payload, iv: row.iv }, key); }
+        catch { continue; }
+        if (database !== this.db || !vaultCryptoService.isLoaded || vaultCryptoService.key !== key) throw new Error('SESSION_CHANGED');
+        await database.runAsync(`INSERT OR IGNORE INTO vault_items
+          (id,label,category,encrypted_payload,iv,requires_approval,is_favorite,synced,created_at,updated_at,operation_id)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+          [row.id,row.label,row.category,row.encrypted_payload,row.iv,row.requires_approval,row.is_favorite,
+            row.synced,row.created_at,row.updated_at,randomUUID()]);
+      }
+    } finally { await legacy.closeAsync(); }
+  }
+
+  get accountId(): string | null {
+    return this.ownerId;
+  }
+
+  async close(): Promise<void> {
+    const database = this.db;
+    this.db = null;
+    this.ownerId = null;
+    await database?.closeAsync();
+  }
+
+  async eraseAccount(ownerId: string): Promise<void> {
+    if (ownerId !== this.ownerId) throw new Error('SESSION_CHANGED');
+    const key = vaultCryptoService.key;
+    const legacy = await SQLite.openDatabaseAsync('senha_facil_vault.db');
+    try {
+      const table = await legacy.getFirstAsync("SELECT name FROM sqlite_master WHERE type='table' AND name='vault_items'");
+      if (table) for (const row of await legacy.getAllAsync<Row>('SELECT * FROM vault_items')) {
+        try { await decryptVaultItem({ ciphertext: row.encrypted_payload, iv: row.iv }, key); }
+        catch { continue; }
+        await legacy.runAsync('DELETE FROM vault_items WHERE id = ?', [row.id]);
+      }
+    } finally { await legacy.closeAsync(); }
+    await this.close();
+    await SQLite.deleteDatabaseAsync(`senha_facil_${ownerId}.db`);
   }
 
   private get database(): SQLite.SQLiteDatabase {
@@ -91,16 +183,25 @@ class OfflineVaultService {
     plaintext: VaultItemPlaintext,
     options: { requiresApproval?: boolean; isFavorite?: boolean; synced?: boolean } = {},
   ): Promise<void> {
-    const { ciphertext, iv } = await encryptVaultItem(plaintext, vaultCryptoService.key);
+    const database = this.database;
+    const account = this.ownerId;
+    const key = vaultCryptoService.key;
+    const resolvedId = await this.resolveId(id);
+    const { ciphertext, iv } = await encryptVaultItem(plaintext, key);
+    if (this.ownerId !== account || database !== this.db || !vaultCryptoService.isLoaded || vaultCryptoService.key !== key) throw new Error('SESSION_CHANGED');
     const now = new Date().toISOString();
 
-    await this.database.runAsync(
-      `INSERT OR REPLACE INTO vault_items
+    await database.runAsync(
+      `INSERT INTO vault_items
          (id, label, category, encrypted_payload, iv,
-          requires_approval, is_favorite, synced, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          requires_approval, is_favorite, synced, created_at, updated_at, operation_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET label=excluded.label, category=excluded.category,
+         encrypted_payload=excluded.encrypted_payload, iv=excluded.iv,
+         requires_approval=excluded.requires_approval, is_favorite=excluded.is_favorite,
+         synced=excluded.synced, updated_at=excluded.updated_at, operation_id=excluded.operation_id`,
       [
-        id,
+        resolvedId,
         label,
         category,
         ciphertext,
@@ -110,6 +211,7 @@ class OfflineVaultService {
         options.synced ? 1 : 0,
         now,
         now,
+        randomUUID(),
       ],
     );
   }
@@ -117,44 +219,40 @@ class OfflineVaultService {
   /**
    * Retrieves and decrypts all vault items ordered by most recently updated.
    */
-  async getAllItems(): Promise<DecryptedVaultItem[]> {
-    type Row = {
-      id: string;
-      label: string;
-      category: string;
-      encrypted_payload: string;
-      iv: string;
-      requires_approval: number;
-      is_favorite: number;
-      synced: number;
-      created_at: string;
-      updated_at: string;
-    };
-
+  async getAllItems(): Promise<LocalVaultItem[]> {
     const rows = await this.database.getAllAsync<Row>(
-      'SELECT * FROM vault_items ORDER BY updated_at DESC',
+      'SELECT * FROM vault_items WHERE deleted = 0 ORDER BY is_favorite DESC, updated_at DESC',
     );
+    return rows.map(fromRow);
+  }
 
-    return Promise.all(
-      rows.map(async (row): Promise<DecryptedVaultItem> => {
-        const payload: EncryptedPayload = { ciphertext: row.encrypted_payload, iv: row.iv };
-        const plaintext = await decryptVaultItem(payload, vaultCryptoService.key);
+  async getItem(id: string): Promise<LocalVaultItem | null> {
+    const database = this.database;
+    const resolvedId = await this.resolveId(id);
+    if (database !== this.db) throw new Error('SESSION_CHANGED');
+    const row = await database.getFirstAsync<Row>('SELECT * FROM vault_items WHERE id = ? AND deleted = 0', [resolvedId]);
+    if (database !== this.db) throw new Error('SESSION_CHANGED');
+    return row ? fromRow(row) : null;
+  }
 
-        return {
-          id: row.id,
-          label: row.label,
-          category: row.category as VaultCategory,
-          encryptedPayload: row.encrypted_payload,
-          iv: row.iv,
-          requiresApproval: row.requires_approval === 1,
-          isFavorite: row.is_favorite === 1,
-          synced: row.synced === 1,
-          createdAt: row.created_at,
-          updatedAt: row.updated_at,
-          plaintext,
-        };
-      }),
-    );
+  async resolveId(id: string): Promise<string> {
+    const database = this.database;
+    let current = id;
+    for (let count = 0; count < 8; count++) {
+      const alias = await database.getFirstAsync<{ new_id: string }>('SELECT new_id FROM item_aliases WHERE old_id = ?', [current]);
+      if (database !== this.db) throw new Error('SESSION_CHANGED');
+      if (!alias) return current;
+      current = alias.new_id;
+    }
+    throw new Error('INVALID_ID_ALIAS');
+  }
+
+  async decryptItem(item: LocalVaultItem): Promise<DecryptedVaultItem> {
+    const key = vaultCryptoService.key;
+    const account = this.ownerId;
+    const plaintext = await decryptVaultItem({ ciphertext: item.encryptedPayload, iv: item.iv }, key);
+    if (account !== this.ownerId || !vaultCryptoService.isLoaded || vaultCryptoService.key !== key) throw new Error('SESSION_CHANGED');
+    return { ...item, plaintext };
   }
 
   /**
@@ -162,47 +260,40 @@ class OfflineVaultService {
    * Used by the sync service when connectivity is restored.
    */
   async getUnsyncedItems(): Promise<LocalVaultItem[]> {
-    type Row = {
-      id: string;
-      label: string;
-      category: string;
-      encrypted_payload: string;
-      iv: string;
-      requires_approval: number;
-      is_favorite: number;
-      synced: number;
-      created_at: string;
-      updated_at: string;
-    };
-
     const rows = await this.database.getAllAsync<Row>(
-      'SELECT * FROM vault_items WHERE synced = 0',
+      'SELECT * FROM vault_items WHERE synced = 0 AND conflict = 0',
     );
-
-    return rows.map((row) => ({
-      id: row.id,
-      label: row.label,
-      category: row.category as VaultCategory,
-      encryptedPayload: row.encrypted_payload,
-      iv: row.iv,
-      requiresApproval: row.requires_approval === 1,
-      isFavorite: row.is_favorite === 1,
-      synced: false,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
+    return rows.map(fromRow);
   }
 
-  /** Marks an item as synced after a successful server upload. */
-  async markAsSynced(id: string): Promise<void> {
-    await this.database.runAsync(
-      'UPDATE vault_items SET synced = 1, updated_at = ? WHERE id = ?',
-      [new Date().toISOString(), id],
-    );
+  async acknowledge(item: LocalVaultItem, result: { serverId: string; version: number; action: string; serverDeleted?: boolean }): Promise<void> {
+    await this.database.withExclusiveTransactionAsync(async (transaction) => {
+      if (item.id !== result.serverId) await transaction.runAsync('INSERT OR REPLACE INTO item_aliases (old_id,new_id) VALUES (?,?)', [item.id, result.serverId]);
+      await transaction.runAsync(`UPDATE vault_items SET id = ?, version = ?,
+      synced = CASE WHEN operation_id = ? AND ? != 'conflict' THEN 1 ELSE 0 END,
+      conflict = CASE WHEN ? = 'conflict' THEN 1 ELSE conflict END, remote_deleted = ? WHERE id = ?`,
+      [result.serverId, result.version, item.operationId, result.action, result.action, result.serverDeleted ? 1 : 0, item.id]);
+    });
   }
 
   async deleteItem(id: string): Promise<void> {
-    await this.database.runAsync('DELETE FROM vault_items WHERE id = ?', [id]);
+    const database = this.database;
+    const resolvedId = await this.resolveId(id);
+    if (database !== this.db) throw new Error('SESSION_CHANGED');
+    await database.runAsync('UPDATE vault_items SET deleted = 1, synced = 0, operation_id = ?, updated_at = ? WHERE id = ?',
+      [randomUUID(), new Date().toISOString(), resolvedId]);
+  }
+
+  async setFavorite(id: string, favorite: boolean): Promise<void> {
+    const database = this.database;
+    const resolvedId = await this.resolveId(id);
+    if (database !== this.db) throw new Error('SESSION_CHANGED');
+    await database.runAsync('UPDATE vault_items SET is_favorite = ?, synced = 0, operation_id = ?, updated_at = ? WHERE id = ? AND deleted = 0',
+      [favorite ? 1 : 0, randomUUID(), new Date().toISOString(), resolvedId]);
+  }
+
+  async getConflicts(): Promise<LocalVaultItem[]> {
+    return (await this.database.getAllAsync<Row>('SELECT * FROM vault_items WHERE conflict = 1')).map(fromRow);
   }
 
   /**
@@ -215,46 +306,14 @@ class OfflineVaultService {
    *   2. Delete the old row
    * Both steps run in a single transaction for atomicity.
    */
-  async remapItemId(oldId: string, newId: string): Promise<void> {
-    type Row = {
-      label: string;
-      category: string;
-      encrypted_payload: string;
-      iv: string;
-      requires_approval: number;
-      is_favorite: number;
-      created_at: string;
-      updated_at: string;
-    };
-
-    await this.database.withTransactionAsync(async () => {
-      const row = await this.database.getFirstAsync<Row>(
-        'SELECT * FROM vault_items WHERE id = ?',
-        [oldId],
-      );
-
-      if (!row) return; // Already remapped or deleted — no-op
-
-      await this.database.runAsync(
-        `INSERT INTO vault_items
-           (id, label, category, encrypted_payload, iv,
-            requires_approval, is_favorite, synced, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
-        [
-          newId,
-          row.label,
-          row.category,
-          row.encrypted_payload,
-          row.iv,
-          row.requires_approval,
-          row.is_favorite,
-          row.created_at,
-          row.updated_at,
-        ],
-      );
-
-      await this.database.runAsync('DELETE FROM vault_items WHERE id = ?', [oldId]);
-    });
+  async resolveConflict(id: string, keepLocal: boolean): Promise<void> {
+    if (keepLocal) {
+      await this.database.runAsync(`UPDATE vault_items SET conflict = 0, operation_id = ?,
+        id = CASE WHEN remote_deleted = 1 THEN ? ELSE id END,
+        version = CASE WHEN remote_deleted = 1 THEN 0 ELSE version END, remote_deleted = 0 WHERE id = ?`,
+        [randomUUID(), `local_${randomUUID()}`, id]);
+    }
+    else await this.database.runAsync('DELETE FROM vault_items WHERE id = ? AND conflict = 1', [id]);
   }
 
   /**
@@ -263,16 +322,21 @@ class OfflineVaultService {
    *
    * @param serverItems - Encrypted items as returned by GET /vault
    */
-  async replaceWithServerData(serverItems: LocalVaultItem[]): Promise<void> {
-    await this.database.withTransactionAsync(async () => {
-      await this.database.runAsync('DELETE FROM vault_items');
-
+  async mergeServerData(serverItems: LocalVaultItem[]): Promise<void> {
+    const database = this.database;
+    await database.withExclusiveTransactionAsync(async (transaction) => {
       for (const item of serverItems) {
-        await this.database.runAsync(
+        await transaction.runAsync(
           `INSERT INTO vault_items
              (id, label, category, encrypted_payload, iv,
-              requires_approval, is_favorite, synced, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+              requires_approval, is_favorite, synced, created_at, updated_at, version, operation_id, deleted)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET label=excluded.label, category=excluded.category,
+             encrypted_payload=excluded.encrypted_payload, iv=excluded.iv,
+             requires_approval=excluded.requires_approval, is_favorite=excluded.is_favorite,
+             created_at=excluded.created_at, updated_at=excluded.updated_at,
+             version=excluded.version, deleted=excluded.deleted
+           WHERE vault_items.synced = 1`,
           [
             item.id,
             item.label,
@@ -283,10 +347,28 @@ class OfflineVaultService {
             item.isFavorite ? 1 : 0,
             item.createdAt,
             item.updatedAt,
+            item.version,
+            item.operationId,
+            item.deleted ? 1 : 0,
           ],
         );
       }
     });
+  }
+
+  async recordEmergency(id: string): Promise<string> {
+    const eventId = randomUUID();
+    await this.database.runAsync('INSERT INTO emergency_events (id, vault_item_id, occurred_at) VALUES (?, ?, ?)',
+      [eventId, id, new Date().toISOString()]);
+    return eventId;
+  }
+
+  async getEmergencyEvents(): Promise<Array<{ id: string; vault_item_id: string; occurred_at: string }>> {
+    return this.database.getAllAsync('SELECT * FROM emergency_events');
+  }
+
+  async acknowledgeEmergency(id: string): Promise<void> {
+    await this.database.runAsync('DELETE FROM emergency_events WHERE id = ?', [id]);
   }
 }
 

@@ -24,8 +24,9 @@ class ConnectivityService {
 
   /** Begin listening for network state changes. Call once at app startup. */
   start(): void {
+    if (this.unsubscribeNetInfo) return;
     this.unsubscribeNetInfo = NetInfo.addEventListener((state: NetInfoState) => {
-      const online = Boolean(state.isConnected && state.isInternetReachable);
+      const online = Boolean(state.isConnected && state.isInternetReachable !== false);
       if (online !== this._isOnline) {
         this._isOnline = online;
         this.listeners.forEach((cb) => cb(online));

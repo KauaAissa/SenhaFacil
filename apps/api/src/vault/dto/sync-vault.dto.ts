@@ -4,10 +4,13 @@ import {
   IsBoolean,
   IsEnum,
   IsISO8601,
+  IsInt,
   IsOptional,
   IsString,
+  IsUUID,
   MaxLength,
   MinLength,
+  Min,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -21,7 +24,20 @@ import { VaultCategoryDto } from './create-vault-item.dto';
 export class SyncItemDto {
   /** Client-assigned local ID (cuid format from offlineVaultService). */
   @IsString()
+  @MinLength(1)
+  @MaxLength(100)
   id: string;
+
+  @IsUUID()
+  operationId: string;
+
+  @IsInt()
+  @Min(0)
+  version: number;
+
+  @IsOptional()
+  @IsBoolean()
+  deleted?: boolean;
 
   @IsString()
   @MinLength(1)
