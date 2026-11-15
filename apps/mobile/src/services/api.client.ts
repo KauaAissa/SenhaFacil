@@ -1,6 +1,7 @@
 import * as SecureStore from 'expo-secure-store';
 import { decodeBase64 } from '@senha-facil/crypto';
 import { randomUUID } from 'expo-crypto';
+import { apiErrorMessage, UserFacingError } from './error-messages';
 
 const TOKENS_STORE_KEY = 'sf_session_tokens_v2';
 interface Tokens { accessToken: string; refreshToken: string; refreshRequestId?: string }
@@ -11,12 +12,13 @@ interface Tokens { accessToken: string; refreshToken: string; refreshRequestId?:
  */
 export const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000';
 
-export class ApiError extends Error {
+export class ApiError extends UserFacingError {
   constructor(
     public readonly status: number,
     public readonly body: string,
+    public readonly path = '',
   ) {
-    super(`HTTP ${status}: ${body}`);
+    super(apiErrorMessage(status, body, path));
     this.name = 'ApiError';
   }
 
@@ -45,6 +47,17 @@ export class ApiClient {
   private controllers = new Set<AbortController>();
   private renewal: Promise<string | null> | null = null;
   private writes: Promise<void> = Promise.resolve();
+  private serverClock: { timestamp: number; elapsed: number } | null = null;
+
+  getServerTime(): number {
+    if (!this.serverClock) return Date.now();
+    return this.serverClock.timestamp + Math.max(0, performance.now() - this.serverClock.elapsed);
+  }
+
+  private updateServerClock(response: Response, startedAt: number): void {
+    const timestamp = Date.parse(response.headers?.get('Date') ?? '');
+    if (Number.isFinite(timestamp)) this.serverClock = { timestamp: timestamp + 1_000, elapsed: startedAt };
+  }
 
   cancelRequests(): void {
     this.generation += 1;
@@ -74,7 +87,7 @@ export class ApiClient {
     const stored = await SecureStore.getItemAsync(TOKENS_STORE_KEY);
     if (!stored || generation !== this.generation) return null;
     const tokens: Tokens = JSON.parse(stored);
-    if (expiresAt(tokens.accessToken) > Date.now() + 30_000) return tokens.accessToken;
+    if (expiresAt(tokens.accessToken) > this.getServerTime() + 30_000) return tokens.accessToken;
     if (!this.renewal) {
       const renewal = this.renew(tokens, generation);
       this.renewal = renewal;
@@ -103,24 +116,30 @@ export class ApiClient {
   private async renew(tokens: Tokens, generation: number): Promise<string | null> {
     const controller = new AbortController();
     this.controllers.add(controller);
-    const timeout = setTimeout(() => controller.abort(), 15_000);
+    let timedOut = false;
+    const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 15_000);
     try {
       const requestId = tokens.refreshRequestId ?? randomUUID();
       await this.persist({ ...tokens, refreshRequestId: requestId }, generation);
       if (generation !== this.generation) throw new Error('SESSION_CHANGED');
+      const startedAt = performance.now();
       const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refreshToken: tokens.refreshToken, requestId }), signal: controller.signal,
       });
       if (generation !== this.generation) throw new Error('SESSION_CHANGED');
+      this.updateServerClock(response, startedAt);
       if (!response.ok) {
         if (response.status === 401) await this.persist(null, generation);
-        throw new ApiError(response.status, await response.text());
+        throw new ApiError(response.status, await response.text(), '/auth/refresh');
       }
       const renewed: Tokens = await response.json();
       if (generation !== this.generation) throw new Error('SESSION_CHANGED');
       await this.persist(renewed, generation);
       return generation === this.generation ? renewed.accessToken : null;
+    } catch (error) {
+      if (timedOut) throw new UserFacingError('A resposta demorou demais. Confira a conexão e tente novamente.');
+      throw error;
     } finally {
       clearTimeout(timeout);
       this.controllers.delete(controller);
@@ -129,12 +148,12 @@ export class ApiClient {
 
   // ─── HTTP methods ──────────────────────────────────────────────────────────
 
-  async get<T>(path: string): Promise<T> {
-    return this.request<T>('GET', path);
+  async get<T>(path: string, signal?: AbortSignal): Promise<T> {
+    return this.request<T>('GET', path, undefined, signal);
   }
 
-  async post<T>(path: string, body: unknown): Promise<T> {
-    return this.request<T>('POST', path, body);
+  async post<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+    return this.request<T>('POST', path, body, signal);
   }
 
   async patch<T>(path: string, body: unknown): Promise<T> {
@@ -151,10 +170,13 @@ export class ApiClient {
     method: string,
     path: string,
     body?: unknown,
+    signal?: AbortSignal,
   ): Promise<T> {
+    if (signal?.aborted) throw new Error('SESSION_CHANGED');
     const generation = this.generation;
     const token = path.startsWith('/auth/') && path !== '/auth/security' ? null : await this.getToken();
     if (generation !== this.generation) throw new Error('SESSION_CHANGED');
+    if (signal?.aborted) throw new Error('SESSION_CHANGED');
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -166,18 +188,24 @@ export class ApiClient {
     }
 
     const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal?.addEventListener('abort', abort, { once: true });
     this.controllers.add(controller);
-    const timer = setTimeout(() => controller.abort(), 15_000);
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 15_000);
     try {
+      const startedAt = performance.now();
       const response = await fetch(`${API_BASE_URL}${path}`, {
         method, headers, signal: controller.signal,
         body: body !== undefined ? JSON.stringify(body) : undefined,
       });
       if (generation !== this.generation) throw new Error('SESSION_CHANGED');
+      if (signal?.aborted) throw new Error('SESSION_CHANGED');
+      this.updateServerClock(response, startedAt);
 
     if (!response.ok) {
       const text = await response.text().catch(() => '');
-      throw new ApiError(response.status, text);
+      throw new ApiError(response.status, text, path);
     }
 
     // 204 No Content — no body to parse
@@ -187,9 +215,14 @@ export class ApiClient {
 
       const result = await response.json();
       if (generation !== this.generation) throw new Error('SESSION_CHANGED');
+      if (signal?.aborted) throw new Error('SESSION_CHANGED');
       return result as T;
+    } catch (error) {
+      if (timedOut) throw new UserFacingError('A resposta demorou demais. Confira a conexão e tente novamente.');
+      throw error;
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
       this.controllers.delete(controller);
     }
   }

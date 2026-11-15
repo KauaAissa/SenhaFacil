@@ -2,13 +2,14 @@ import { Pressable, StyleSheet, ActivityIndicator, type GestureResponderEvent } 
 import { Ionicons } from '@expo/vector-icons';
 import type { ComponentProps } from 'react';
 import { AccessibleText } from './AccessibleText';
-import { colors, spacing, touchTarget } from '../../theme/theme';
-import { useAccessibilityStore } from '../../stores/accessibility.store';
+import { spacing, touchTarget } from '../../theme/theme';
+import { useThemeColors } from '../../hooks/useThemeColors';
+import { useState } from 'react';
 import Animated, { ReduceMotion, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
-type Variant = 'primary' | 'secondary' | 'danger';
+type Variant = 'primary' | 'secondary' | 'danger' | 'quiet';
 
 interface AccessibleButtonProps {
   label: string;
@@ -18,6 +19,7 @@ interface AccessibleButtonProps {
   loading?: boolean;
   accessibilityHint?: string;
   icon?: ComponentProps<typeof Ionicons>['name'];
+  expanded?: boolean;
 }
 
 /**
@@ -36,38 +38,43 @@ export function AccessibleButton({
   loading = false,
   accessibilityHint,
   icon,
+  expanded,
 }: AccessibleButtonProps) {
   const isDisabled = disabled || loading;
-  const highContrast = useAccessibilityStore((state) => state.highContrast);
+  const colors = useThemeColors();
+  const [focused, setFocused] = useState(false);
   const scale = useSharedValue(1);
   const motion = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+  const filled = variant === 'primary' || variant === 'danger';
+  const foreground = isDisabled || filled ? colors.inverse : colors.primary;
+  const backgroundColor = isDisabled ? colors.disabled : variant === 'primary' ? colors.primary
+    : variant === 'danger' ? colors.danger : variant === 'secondary' ? colors.primarySoft : 'transparent';
 
   return (
     <AnimatedPressable
       onPress={onPress}
       onPressIn={() => { scale.value = withTiming(0.98, { duration: 100, reduceMotion: ReduceMotion.System }); }}
       onPressOut={() => { scale.value = withTiming(1, { duration: 140, reduceMotion: ReduceMotion.System }); }}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
       disabled={isDisabled}
       accessibilityRole="button"
       accessibilityLabel={label}
       accessibilityHint={accessibilityHint}
-      accessibilityState={{ disabled: isDisabled, busy: loading }}
+      accessibilityState={{ disabled: isDisabled, busy: loading, expanded }}
+      aria-disabled={isDisabled}
+      aria-busy={loading}
+      aria-expanded={expanded}
       style={[
         styles.base,
         motion,
-        styles[variant],
-        highContrast && { backgroundColor: '#000000' },
-        isDisabled && styles.disabled,
+        { backgroundColor, borderColor: focused ? colors.accent : variant === 'quiet' ? 'transparent' : isDisabled ? colors.disabled : variant === 'danger' ? colors.danger : colors.primary },
+        focused && { borderWidth: 3 },
       ]}
     >
-      {loading ? (
-        <ActivityIndicator color="#FFFFFF" />
-      ) : (
-        <>
-          {icon && <Ionicons name={icon} size={24} color={variant === 'secondary' && !highContrast && !isDisabled ? colors.accent : '#FFFFFF'} accessible={false} />}
-          <AccessibleText variant="bodyLarge" bold color={variant === 'secondary' && !highContrast && !isDisabled ? colors.textPrimary : '#FFFFFF'} style={{ flexShrink: 1, textAlign: 'center' }}>{label}</AccessibleText>
-        </>
-      )}
+      {loading ? <ActivityIndicator color={foreground} accessible={false} />
+        : icon && <Ionicons name={icon} size={23} color={foreground} accessible={false} aria-hidden />}
+      <AccessibleText variant="body" bold color={foreground} style={{ flexShrink: 1, textAlign: 'center' }}>{label}</AccessibleText>
     </AnimatedPressable>
   );
 }
@@ -75,16 +82,14 @@ export function AccessibleButton({
 const styles = StyleSheet.create({
   base: {
     minHeight: touchTarget.minHeight,
+    minWidth: touchTarget.minWidth,
+    borderWidth: 1,
     borderRadius: touchTarget.borderRadius,
     alignItems: 'center',
     flexDirection: 'row',
     gap: spacing.sm,
     justifyContent: 'center',
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
+    paddingVertical: 14,
   },
-  primary: { backgroundColor: colors.primary },
-  secondary: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.textSecondary },
-  danger: { backgroundColor: colors.danger },
-  disabled: { backgroundColor: colors.disabled },
 });

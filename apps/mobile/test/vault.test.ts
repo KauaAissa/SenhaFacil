@@ -9,6 +9,8 @@ import { apiClient } from '../src/services/api.client';
 import Constants from 'expo-constants';
 import { configureKeyDerivation, deriveKey, exportVaultKey, destroyVaultKey } from '@senha-facil/crypto';
 import { configureMobileKeyDerivation } from '../src/services/key-derivation.native';
+import { syncService } from '../src/services/sync.service';
+import { connectivityService } from '../src/services/connectivity.service';
 
 jest.mock('expo-constants', () => ({ __esModule: true, default: { executionEnvironment: 'bare' }, ExecutionEnvironment: { StoreClient: 'storeClient' } }));
 jest.mock('react-native-quick-crypto', () => jest.requireActual('node:crypto'));
@@ -63,6 +65,20 @@ test('editing preserves creation date and changes the operation ID', async () =>
   expect(updated.createdAt).toBe(original.createdAt);
   expect(updated.operationId).not.toBe(original.operationId);
   expect(updated.iv).not.toBe(original.iv);
+});
+
+test('creating a saved item returns before synchronization so navigation can leave the form immediately', async () => {
+  await offlineVaultService.initialize(randomUUID());
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve) => { finish = resolve; });
+  jest.spyOn(connectivityService, 'isOnline', 'get').mockReturnValue(true);
+  const sync = jest.spyOn(syncService, 'sync').mockReturnValue(pending);
+  try {
+    const id = await vaultService.createItem({ label: 'Saved fixture', category: 'OTHER', plaintext: { password: 'fictitious-secret' } });
+    expect(id).toMatch(/^local_/);
+    expect(await vaultService.getItem(id)).toMatchObject({ label: 'Saved fixture', synced: false });
+    expect(sync).toHaveBeenCalledTimes(1);
+  } finally { finish(); await pending; await offlineVaultService.close(); }
 });
 
 test('acknowledging a stale upload does not acknowledge an in-flight edit', async () => {
@@ -126,6 +142,35 @@ test('protected item cannot be decrypted by the facade without a current matchin
   await offlineVaultService.close();
 });
 
+test.each([387_000, -387_000])('approval remains usable until the API deadline despite device skew of %i ms', async (skew) => {
+  const serverTime = Date.now();
+  jest.spyOn(Date, 'now').mockReturnValue(serverTime + skew);
+  const clock = jest.spyOn(apiClient, 'getServerTime').mockReturnValue(serverTime);
+  await offlineVaultService.initialize(randomUUID());
+  try {
+    await offlineVaultService.saveItem('protected', 'Banco', 'BANKING', { password: 'fictitious-secret' }, { requiresApproval: true });
+    const decrypt = jest.spyOn(offlineVaultService, 'decryptItem');
+    jest.spyOn(apiClient, 'get').mockResolvedValue({ status: 'APPROVED', vaultItemId: 'protected',
+      expiresAt: new Date(serverTime + 120_000).toISOString() });
+    expect((await vaultService.revealItem('protected', 'request')).plaintext.password).toBe('fictitious-secret');
+    expect(decrypt).toHaveBeenCalledTimes(1);
+    clock.mockReturnValue(serverTime + 120_000);
+    await expect(vaultService.revealItem('protected', 'request')).rejects.toThrow('expirada');
+    expect(decrypt).toHaveBeenCalledTimes(1);
+  } finally { await offlineVaultService.close(); }
+});
+
+test('an approval with an invalid deadline cannot decrypt a protected item', async () => {
+  await offlineVaultService.initialize(randomUUID());
+  try {
+    await offlineVaultService.saveItem('protected', 'Banco', 'BANKING', { password: 'fictitious-secret' }, { requiresApproval: true });
+    const decrypt = jest.spyOn(offlineVaultService, 'decryptItem');
+    jest.spyOn(apiClient, 'get').mockResolvedValue({ status: 'APPROVED', vaultItemId: 'protected', expiresAt: 'invalid-date' });
+    await expect(vaultService.revealItem('protected', 'request')).rejects.toThrow('expirada');
+    expect(decrypt).not.toHaveBeenCalled();
+  } finally { await offlineVaultService.close(); }
+});
+
 test('account-scoped key can unlock offline and rejects another password', async () => {
   const service = new VaultCryptoService();
   const account = randomUUID();
@@ -136,9 +181,13 @@ test('account-scoped key can unlock offline and rejects another password', async
   expect(service.isLoaded).toBe(false);
   await service.unlockWithPassword(account, 'correct-password', salt);
   expect(service.isLoaded).toBe(true);
+  expect(await SecureStore.getItemAsync(`sf_key_${account}`)).toBeNull();
+  await service.enableBiometrics(account, 'correct-password', salt);
   expect(SecureStore.setItemAsync).toHaveBeenCalledWith(`sf_key_${account}`, expect.any(String), expect.objectContaining({ requireAuthentication: true }));
   service.lockKey();
-  await expect(service.loadKey(randomUUID())).rejects.toThrow('ENCRYPTION_KEY_NOT_FOUND');
+  await service.loadKey(account);
+  expect(service.isLoaded).toBe(true);
+  await expect(service.loadKey(randomUUID())).rejects.toThrow('Ative');
   await service.clearKey(account);
 }, 30_000);
 

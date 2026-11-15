@@ -61,6 +61,24 @@ test('HTTP protection contract preserves vault data across rotation and recovery
     const contact = await request<{ id: string }>('/contacts/invite', { caregiverEmail: caregiver.email }, owner.session.accessToken, 'POST', 201);
     await request(`/contacts/${contact.id}/accept`, {}, caregiver.session.accessToken);
     await request(`/contacts/${contact.id}/permissions`, { permissions: ['VIEW_ITEMS', 'APPROVE_ACCESS'] }, owner.session.accessToken, 'PATCH');
+    for (const decision of ['APPROVED', 'DENIED'] as const) {
+      const requested = await request<{ accessLogId: string; status: string }>('/access/request', { vaultItemId: item.id }, owner.session.accessToken, 'POST', 201);
+      assert.equal(requested.status, 'PENDING');
+      const pendingForCaregiver = await request<{ id: string; vaultItem: Record<string, unknown> }[]>('/access/pending', undefined, caregiver.session.accessToken, 'GET');
+      const visible = pendingForCaregiver.find((entry) => entry.id === requested.accessLogId);
+      assert.ok(visible, 'The active caregiver must see the pending request');
+      assert.equal(visible.vaultItem.id, item.id);
+      assert.deepEqual(Object.keys(visible.vaultItem).sort(), ['category', 'id', 'label']);
+      assert.ok(!JSON.stringify(visible).includes(cipher.ciphertext), 'Caregiver pending data must not contain encrypted vault payload');
+      assert.ok(!JSON.stringify(visible).includes('fictitious vault value'), 'Caregiver pending data must not contain the password');
+      await request('/access/respond', { accessLogId: requested.accessLogId, decision }, owner.session.accessToken, 'POST', 403);
+      const resolved = await request<{ status: string }>('/access/respond', { accessLogId: requested.accessLogId, decision }, caregiver.session.accessToken);
+      assert.equal(resolved.status, decision);
+      assert.equal((await request<{ status: string }>(`/access/${requested.accessLogId}`, undefined, owner.session.accessToken, 'GET')).status, decision);
+      await request('/access/respond', { accessLogId: requested.accessLogId, decision: decision === 'APPROVED' ? 'DENIED' : 'APPROVED' }, caregiver.session.accessToken, 'POST', 400);
+      const remaining = await request<{ id: string }[]>('/access/pending', undefined, caregiver.session.accessToken, 'GET');
+      assert.ok(!remaining.some((entry) => entry.id === requested.accessLogId), 'Resolved requests must leave the pending list');
+    }
     const pending = await request<{ accessLogId: string }>('/access/request', { vaultItemId: item.id }, owner.session.accessToken, 'POST', 201);
     await request(`/access/${pending.accessLogId}/cancel`, {}, owner.session.accessToken, 'POST', 201);
     assert.equal((await request<{ status: string }>(`/access/${pending.accessLogId}`, undefined, owner.session.accessToken, 'GET')).status, 'CANCELLED');

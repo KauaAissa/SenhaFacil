@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
 import type { InviteContactDto } from './dto/invite-contact.dto';
 import type { UpdatePermissionsDto } from './dto/update-permissions.dto';
+import { loginLookup, resolveLoginIdentifier } from '../auth/login-identifier';
 
 const CONTACT_SELECT = {
   id: true,
@@ -16,8 +17,8 @@ const CONTACT_SELECT = {
   permissions: true,
   createdAt: true,
   updatedAt: true,
-  elderly: { select: { id: true, name: true, email: true } },
-  caregiver: { select: { id: true, name: true, email: true } },
+  elderly: { select: { id: true, name: true, email: true, loginPhone: true } },
+  caregiver: { select: { id: true, name: true, email: true, loginPhone: true, isActive: true } },
 } as const;
 
 @Injectable()
@@ -27,19 +28,20 @@ export class ContactsService {
   // ─── POST /contacts/invite ──────────────────────────────────────────────────
 
   /**
-   * Elderly user invites a caregiver by email.
+   * Elderly user invites a caregiver by their chosen email or mobile login.
    * The caregiver must already have an account (self-service invite acceptance
    * flow — no email delivery/registration link in this iteration).
    */
   async invite(elderlyId: string, dto: InviteContactDto) {
+    const identifier = resolveLoginIdentifier({ email: dto.caregiverEmail, identifier: dto.caregiverIdentifier });
     return this.prisma.serializable(async (transaction) => {
     const caregiver = await transaction.user.findFirst({
-      where: { email: { equals: dto.caregiverEmail.trim().toLowerCase(), mode: 'insensitive' } },
+      where: loginLookup(identifier),
       select: { id: true, role: true, isActive: true },
     });
 
     if (!caregiver || !caregiver.isActive) {
-      throw new NotFoundException('No account found with this email');
+      throw new NotFoundException('LOGIN_CONTACT_NOT_FOUND');
     }
 
     if (caregiver.id === elderlyId) {

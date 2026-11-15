@@ -1,11 +1,14 @@
-import { Pressable, View, StyleSheet, type GestureResponderEvent } from 'react-native';
-import { colors, spacing, touchTarget } from '../../theme/theme';
+import { Pressable, View, StyleSheet, type GestureResponderEvent, type StyleProp, type ViewStyle } from 'react-native';
+import { spacing, radii, touchTarget } from '../../theme/theme';
+import { useThemeColors } from '../../hooks/useThemeColors';
+import { useState } from 'react';
 
 interface AccessibleCardProps {
   children: React.ReactNode;
   onPress?: (event: GestureResponderEvent) => void;
   accessibilityLabel?: string;
   highlight?: boolean;
+  style?: StyleProp<ViewStyle>;
 }
 
 /**
@@ -20,17 +23,25 @@ export function AccessibleCard({
   onPress,
   accessibilityLabel,
   highlight = false,
+  style,
 }: AccessibleCardProps) {
+  const colors = useThemeColors();
+  const [focused, setFocused] = useState(false);
+  const appearance = { backgroundColor: colors.surface, borderColor: focused ? colors.accent : highlight ? colors.primary : colors.border,
+    borderWidth: focused || highlight ? 2 : 1 };
   if (onPress) {
     return (
       <Pressable
         onPress={onPress}
         accessibilityRole="button"
         accessibilityLabel={accessibilityLabel}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
         style={({ pressed }) => [
           styles.card,
-          highlight && styles.highlight,
-          pressed && styles.pressed,
+          appearance,
+          pressed && { backgroundColor: colors.primarySoft },
+          style,
         ]}
       >
         {children}
@@ -38,22 +49,16 @@ export function AccessibleCard({
     );
   }
 
-  return <View style={[styles.card, highlight && styles.highlight]}>{children}</View>;
+  return <View style={[styles.card, appearance, style]}>{children}</View>;
 }
 
 const styles = StyleSheet.create({
   card: {
     minHeight: touchTarget.minHeight,
-    backgroundColor: colors.background,
     borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: touchTarget.borderRadius,
-    padding: spacing.md,
+    borderRadius: radii.lg,
+    padding: spacing.lg,
     marginBottom: spacing.md,
+    elevation: 1,
   },
-  highlight: {
-    borderColor: colors.primary,
-    borderWidth: 2,
-  },
-  pressed: { opacity: 0.8 },
 });

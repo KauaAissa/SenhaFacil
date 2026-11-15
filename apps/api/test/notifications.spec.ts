@@ -1,6 +1,40 @@
 import { ConfigService } from '@nestjs/config';
+import * as admin from 'firebase-admin';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { NotificationsService } from '../src/notifications/notifications.service';
+
+jest.mock('firebase-admin', () => ({
+  apps: [],
+  initializeApp: jest.fn(() => 'firebase-app'),
+  messaging: jest.fn(() => ({ send: jest.fn() })),
+  credential: {
+    applicationDefault: jest.fn(() => 'external-file-credential'),
+    cert: jest.fn(() => 'inline-credential'),
+  },
+}));
+
+afterEach(() => { jest.clearAllMocks(); });
+
+test('external Firebase credentials initialize without reading inline private key settings', () => {
+  const values: Record<string, string> = { FIREBASE_PROJECT_ID: 'test-project',
+    GOOGLE_APPLICATION_CREDENTIALS: '/private/firebase-admin.json' };
+  const config = { get: jest.fn((name: string) => values[name]), getOrThrow: jest.fn() };
+  new NotificationsService(config as unknown as ConfigService, {} as PrismaService);
+  expect(admin.credential.applicationDefault).toHaveBeenCalledTimes(1);
+  expect(admin.credential.cert).not.toHaveBeenCalled();
+  expect(config.getOrThrow).not.toHaveBeenCalled();
+  expect(admin.initializeApp).toHaveBeenCalledWith({ projectId: 'test-project', credential: 'external-file-credential' });
+});
+
+test('existing inline Firebase credentials remain supported with escaped newlines', () => {
+  const values: Record<string, string> = { FIREBASE_PROJECT_ID: 'test-project',
+    FIREBASE_CLIENT_EMAIL: 'test@example.invalid', FIREBASE_PRIVATE_KEY: 'fake\\nkey' };
+  const config = { get: (name: string) => values[name], getOrThrow: (name: string) => values[name] };
+  new NotificationsService(config as unknown as ConfigService, {} as PrismaService);
+  expect(admin.credential.applicationDefault).not.toHaveBeenCalled();
+  expect(admin.credential.cert).toHaveBeenCalledWith({ projectId: 'test-project',
+    clientEmail: 'test@example.invalid', privateKey: 'fake\nkey' });
+});
 
 function setup() {
   const prisma = { authSession: {

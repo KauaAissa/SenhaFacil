@@ -19,7 +19,8 @@ datasource db {
 // =============================================================================
 model User {
   id           String   @id @default(cuid())
-  email        String   @unique
+  email        String?  @unique
+  loginPhone   String?  @unique
   phone        String?  @unique
   name         String
   surname      String @default("")
@@ -55,6 +56,9 @@ model User {
   approvedAccess     AccessLog[]      @relation("AccessApprover")
   syncOperations     VaultSyncOperation[]
   sessions           AuthSession[]
+  devices            AuthDevice[]
+  securityEvents     SecurityEvent[]
+  securityDeliveries SecurityDelivery[]
 
   @@map("users")
 }
@@ -183,10 +187,70 @@ model AuthSession {
   expiresAt    DateTime
   revokedAt    DateTime?
   createdAt    DateTime @default(now())
+  deviceHash   String?
+  devicePlatform String?
   user         User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@map("auth_sessions")
+}
+
+model AuthDevice {
+  userId String
+  deviceHash String
+  platform String
+  firstSeenAt DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, deviceHash])
+  @@map("auth_devices")
+}
+
+model SecurityRateState {
+  key String @id
+  count Int
+  windowStart DateTime
+  blockedUntil DateTime?
+  expiresAt DateTime
+
+  @@index([expiresAt])
+  @@map("security_rate_states")
+}
+
+model SecurityEvent {
+  id String @id
+  userId String
+  type String
+  source String
+  severity String
+  count Int @default(1)
+  occurredAt DateTime
+  recordedAt DateTime @default(now())
+  expiresAt DateTime
+  dedupeKey String @unique
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveries SecurityDelivery[]
+
+  @@index([userId, recordedAt, id])
+  @@index([expiresAt])
+  @@map("security_events")
+}
+
+model SecurityDelivery {
+  eventId String
+  userId String
+  status String @default("PENDING")
+  attempts Int @default(0)
+  nextAttemptAt DateTime @default(now())
+  leaseUntil DateTime?
+  leaseToken String?
+  event SecurityEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([eventId, userId])
+  @@index([status, nextAttemptAt, leaseUntil])
+  @@map("security_deliveries")
 }
 
 // =============================================================================
@@ -231,11 +295,25 @@ model AccessLog {
   vaultItem VaultItem @relation(fields: [vaultItemId], references: [id], onDelete: Cascade)
   requester User      @relation("AccessRequester", fields: [requesterId], references: [id], onDelete: Cascade)
   approver  User?     @relation("AccessApprover",  fields: [approverId],  references: [id], onDelete: SetNull)
+  location  AccessRequestLocation?
 
   @@index([vaultItemId])
   @@index([requesterId])
   @@index([status, expiresAt]) // Para jobs de expiração automática
   @@map("access_logs")
+}
+
+model AccessRequestLocation {
+  accessLogId String @id
+  latitude    Float
+  longitude   Float
+  accuracy    Float
+  capturedAt  DateTime
+  historyExpiresAt DateTime?
+  accessLog   AccessLog @relation(fields: [accessLogId], references: [id], onDelete: Cascade)
+
+  @@index([historyExpiresAt])
+  @@map("access_request_locations")
 }
 
 enum AccessStatus {

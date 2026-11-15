@@ -1,6 +1,7 @@
 import { Text, type TextProps, StyleSheet } from 'react-native';
-import { colors, fonts, fontSizes } from '../../theme/theme';
+import { fonts, fontSizes } from '../../theme/theme';
 import { useAccessibilityStore } from '../../stores/accessibility.store';
+import { useThemeColors } from '../../hooks/useThemeColors';
 
 type Variant = 'title' | 'titleLarge' | 'body' | 'bodyLarge' | 'caption';
 
@@ -24,15 +25,18 @@ export function AccessibleText({
   style,
   ...rest
 }: AccessibleTextProps) {
-  const { textScale, highContrast } = useAccessibilityStore();
-  const textColor = color ?? colors.textPrimary;
+  const textScale = useAccessibilityStore((state) => state.textScale);
+  const colors = useThemeColors();
+  const textColor = color ?? (variant === 'caption' ? colors.textSecondary : colors.textPrimary);
   return (
     <Text
+      allowFontScaling
+      accessibilityRole={variant.startsWith('title') ? 'header' : undefined}
       style={[
         styles[variant],
         { fontSize: fontSizes[variant] * textScale, lineHeight: fontSizes[variant] * textScale * 1.4,
           fontFamily: bold || variant.startsWith('title') ? fonts.bold : fonts.regular, letterSpacing: 0,
-          color: highContrast && textColor.toUpperCase() !== '#FFFFFF' ? '#000000' : textColor },
+          color: textColor },
         bold && styles.bold,
         style,
       ]}
@@ -50,6 +54,6 @@ const styles = StyleSheet.create({
   },
   body: { fontSize: fontSizes.body, lineHeight: fontSizes.body * 1.4 },
   bodyLarge: { fontSize: fontSizes.bodyLarge, lineHeight: fontSizes.bodyLarge * 1.4 },
-  caption: { fontSize: fontSizes.caption, color: colors.textSecondary },
+  caption: { fontSize: fontSizes.caption },
   bold: { fontWeight: '700' },
 });

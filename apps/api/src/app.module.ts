@@ -10,19 +10,25 @@ import { AccessModule } from './access/access.module';
 import { VaultModule } from './vault/vault.module';
 import { ContactsModule } from './contacts/contacts.module';
 import { UsersModule } from './users/users.module';
+import { PasswordAiModule } from './password-ai/password-ai.module';
+import { SecurityModule } from './security/security.module';
+import { HealthModule } from './health/health.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 60 }]),
     ScheduleModule.forRoot(),
+    SecurityModule,
     PrismaModule,
+    HealthModule,
     AuthModule,
     NotificationsModule,
     AccessModule,
     VaultModule,
     ContactsModule,
     UsersModule,
+    PasswordAiModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

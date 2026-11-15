@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import type { CreateVaultItemDto } from './dto/create-vault-item.dto';
 import type { UpdateVaultItemDto } from './dto/update-vault-item.dto';
 import type { SyncVaultDto } from './dto/sync-vault.dto';
+import { SecurityService } from '../security/security.service';
 
 /** Columns returned in all vault item responses — never exposes userId */
 const VAULT_ITEM_SELECT = {
@@ -27,12 +28,22 @@ const VAULT_ITEM_SELECT = {
 
 @Injectable()
 export class VaultService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly security: SecurityService) {}
+
+  private async requireApprovingContact(database: Pick<Prisma.TransactionClient, 'trustedContact'>, userId: string): Promise<void> {
+    const contact = await database.trustedContact.findFirst({
+      where: { elderlyId: userId, status: 'ACTIVE', permissions: { has: 'APPROVE_ACCESS' }, caregiver: { isActive: true } },
+      select: { id: true },
+    });
+    if (!contact) throw new BadRequestException('Adicione um familiar ativo com permissao para aprovar acessos.');
+  }
 
   // ─── POST /vault ───────────────────────────────────────────────────────────
 
   async create(userId: string, dto: CreateVaultItemDto) {
-    return this.prisma.vaultItem.create({
+    return this.prisma.serializable(async (transaction) => {
+    if (dto.requiresApproval) await this.requireApprovingContact(transaction, userId);
+    return transaction.vaultItem.create({
       data: {
         userId,
         label: dto.label,
@@ -43,6 +54,7 @@ export class VaultService {
         isFavorite: dto.isFavorite ?? false,
       },
       select: VAULT_ITEM_SELECT,
+    });
     });
   }
 
@@ -73,14 +85,16 @@ export class VaultService {
     }
 
     // Ownership check — findFirst enforces userId so no user can update another's item
-    const existing = await this.prisma.vaultItem.findFirst({
+    return this.prisma.serializable(async (transaction) => {
+    const existing = await transaction.vaultItem.findFirst({
       where: { id: itemId, userId, deletedAt: null },
-      select: { id: true },
+      select: { id: true, requiresApproval: true },
     });
 
     if (!existing) throw new NotFoundException('Vault item not found');
+    if (dto.requiresApproval && !existing.requiresApproval) await this.requireApprovingContact(transaction, userId);
 
-    return this.prisma.vaultItem.update({
+    return transaction.vaultItem.update({
       where: { id: itemId, userId, deletedAt: null },
       data: {
         version: { increment: 1 },
@@ -93,21 +107,25 @@ export class VaultService {
       },
       select: VAULT_ITEM_SELECT,
     });
+    });
   }
 
   // ─── DELETE /vault/:id ─────────────────────────────────────────────────────
 
   async remove(userId: string, itemId: string): Promise<void> {
-    const existing = await this.prisma.vaultItem.findFirst({
+    await this.prisma.serializable(async (transaction) => {
+    const existing = await transaction.vaultItem.findFirst({
       where: { id: itemId, userId },
       select: { id: true },
     });
 
     if (!existing) throw new NotFoundException('Vault item not found');
 
-    await this.prisma.vaultItem.updateMany({
+    const result = await transaction.vaultItem.updateMany({
       where: { id: itemId, userId, deletedAt: null },
       data: { deletedAt: new Date(), version: { increment: 1 }, encryptedPayload: '', iv: '' },
+    });
+    await this.security.observeDeletions(transaction, userId, result.count);
     });
   }
 
@@ -131,6 +149,7 @@ export class VaultService {
             clientId: string; serverId: string; operationId: string;
             action: 'created' | 'updated' | 'deleted' | 'conflict'; version: number; serverDeleted: boolean;
           }> = [];
+          let deleted = 0;
           for (const item of dto.items) {
             const receipt = await transaction.vaultSyncOperation.findUnique({
               where: { userId_operationId: { userId, operationId: item.operationId } },
@@ -152,6 +171,9 @@ export class VaultService {
             } else if (!existing && item.version !== 0) {
               action = 'conflict';
             } else {
+              if (!item.deleted && item.requiresApproval && !existing?.requiresApproval) {
+                await this.requireApprovingContact(transaction, userId);
+              }
               version += 1;
               const data = {
                 label: item.label, category: item.category,
@@ -164,11 +186,13 @@ export class VaultService {
               if (existing) await transaction.vaultItem.update({ where: { id: serverId, userId }, data });
               else await transaction.vaultItem.create({ data: { ...data, id: serverId, userId } });
               action = item.deleted ? 'deleted' : existing ? 'updated' : 'created';
+              if (item.deleted) deleted += 1;
             }
             const result = { clientId: item.id, serverId, operationId: item.operationId, action, version, serverDeleted: Boolean(existing?.deletedAt) };
             await transaction.vaultSyncOperation.create({ data: { userId, operationId: item.operationId, result } });
             results.push(result);
           }
+          await this.security.observeDeletions(transaction, userId, deleted);
           return { results, synced: results.filter((result) => result.action !== 'conflict').length,
             skipped: results.filter((result) => result.action === 'conflict').length };
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });

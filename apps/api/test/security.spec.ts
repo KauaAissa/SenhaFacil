@@ -4,6 +4,8 @@ import { JwtService } from '@nestjs/jwt';
 import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
 import { SecurityUpdateDto } from '../src/auth/dto/vault-protection.dto';
+import { ConfigService } from '@nestjs/config';
+import { securityMock } from './security-mock';
 
 jest.mock('argon2', () => ({ argon2id: 2, verify: jest.fn(async (_hash: string, value: string) => value === 'current-password'), hash: jest.fn(async (value: string) => `hashed:${value}`) }));
 const protection = { salt: '01'.repeat(16), recoverySalt: '02'.repeat(16),
@@ -13,7 +15,7 @@ function setup() {
   const prisma = { user: { findUnique: jest.fn().mockResolvedValue({ id: 'owner', isActive: true, passwordHash: 'old-hash', authVersion: 1 }),
     updateMany: jest.fn().mockResolvedValue({ count: 1 }) }, authSession: { updateMany: jest.fn() }, serializable: jest.fn() };
   prisma.serializable.mockImplementation(async (operation) => operation(prisma));
-  return { prisma, service: new AuthService(prisma as unknown as PrismaService, {} as JwtService) };
+  return { prisma, service: new AuthService(prisma as unknown as PrismaService, {} as JwtService, new ConfigService(), securityMock()) };
 }
 
 const update = { currentCredential: 'current-password', credential: 'aa'.repeat(32), recoveryCredential: 'bb'.repeat(32), securityVersion: 0, protection };

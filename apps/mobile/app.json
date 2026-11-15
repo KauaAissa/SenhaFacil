@@ -28,10 +28,14 @@
     },
     "android": {
       "package": "com.senhafacil.app",
+      "googleServicesFile": "../../google-services.json",
       "allowBackup": false,
+      "softwareKeyboardLayoutMode": "resize",
       "blockedPermissions": [
         "android.permission.READ_EXTERNAL_STORAGE",
-        "android.permission.WRITE_EXTERNAL_STORAGE"
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE_LOCATION"
       ],
       "permissions": [
         "USE_BIOMETRIC",
@@ -56,6 +60,15 @@
         }
       ],
       "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "isAndroidBackgroundLocationEnabled": false,
+          "isAndroidForegroundServiceEnabled": false,
+          "isIosBackgroundLocationEnabled": false,
+          "locationWhenInUsePermission": "Sua localização é compartilhada apenas ao enviar um pedido de acesso ao familiar. Não fazemos rastreamento."
+        }
+      ],
       [
         "expo-local-authentication",
         {

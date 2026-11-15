@@ -5,15 +5,24 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { createHash } from 'node:crypto';
+import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AccessGateway } from './access.gateway';
 import type { RequestAccessDto } from './dto/request-access.dto';
 import type { RespondAccessDto } from './dto/respond-access.dto';
 import type { EmergencyAccessDto } from './dto/emergency-access.dto';
+import { SecurityLimitError, SecurityService } from '../security/security.service';
 
 /** Window (minutes) for a caregiver to respond before auto-expiry */
-const EXPIRY_MINUTES = 2;
+const EXPIRY_MINUTES = 10;
+const LOCATION_HISTORY_LIFETIME = 30 * 24 * 60 * 60_000;
+
+function historyVisibility(userId: string): Prisma.AccessLogWhereInput {
+  return { requester: { isActive: true }, OR: [{ requesterId: userId }, { requester: { elderlyRelations: { some: {
+    caregiverId: userId, status: 'ACTIVE', permissions: { has: 'APPROVE_ACCESS' }, caregiver: { isActive: true },
+  } } } }] };
+}
 
 @Injectable()
 export class AccessService {
@@ -21,11 +30,18 @@ export class AccessService {
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
     private readonly gateway: AccessGateway,
+    private readonly security: SecurityService,
   ) {}
 
   // ─── POST /access/request ──────────────────────────────────────────────────
 
   async requestAccess(elderlyUserId: string, dto: RequestAccessDto) {
+    if (dto.location) {
+      const age = Date.now() - Date.parse(dto.location.capturedAt);
+      if (!Number.isFinite(age) || age < -60_000 || age > 120_000) {
+        throw new BadRequestException('Localizacao antiga ou com horario invalido. Solicite acesso novamente.');
+      }
+    }
     const itemId = dto.vaultItemId.startsWith('local_')
       ? `sf_${createHash('sha256').update(`${elderlyUserId}:${dto.vaultItemId}`).digest('hex')}` : dto.vaultItemId;
     const { accessLog, contacts, created } = await this.prisma.serializable(async (transaction) => {
@@ -42,15 +58,23 @@ export class AccessService {
       if (!contacts.length) throw new BadRequestException('Adicione um familiar ativo com permissao para aprovar acessos.');
       const pending = await transaction.accessLog.findFirst({
         where: { vaultItemId: itemId, requesterId: elderlyUserId, status: 'PENDING', expiresAt: { gt: new Date() } },
-        select: { id: true, status: true, expiresAt: true },
+        select: { id: true, status: true, expiresAt: true, location: { select: { accessLogId: true, historyExpiresAt: true } } },
       });
       if (pending) return { vaultItem, contacts, accessLog: pending, created: false };
+      await this.security.reserveAccess(transaction, elderlyUserId);
+      const requestedAt = new Date(Date.now());
       const accessLog = await transaction.accessLog.create({
         data: { vaultItemId: itemId, requesterId: elderlyUserId, status: 'PENDING',
-          expiresAt: new Date(Date.now() + EXPIRY_MINUTES * 60_000), deviceInfo: dto.deviceInfo },
-        select: { id: true, status: true, expiresAt: true },
+          requestedAt, expiresAt: new Date(requestedAt.getTime() + EXPIRY_MINUTES * 60_000), deviceInfo: dto.deviceInfo,
+          ...(dto.location ? { location: { create: { latitude: dto.location.latitude, longitude: dto.location.longitude,
+            accuracy: dto.location.accuracy, capturedAt: new Date(dto.location.capturedAt),
+            ...(dto.retainLocationInHistory === true ? { historyExpiresAt: new Date(requestedAt.getTime() + LOCATION_HISTORY_LIFETIME) } : {}) } } } : {}) },
+        select: { id: true, status: true, expiresAt: true, location: { select: { accessLogId: true, historyExpiresAt: true } } },
       });
       return { vaultItem, contacts, accessLog, created: true };
+    }).catch(async (error: unknown) => {
+      if (error instanceof SecurityLimitError) await this.security.accessLimitReached(elderlyUserId);
+      throw error;
     });
 
     // 5. Fire FCM pushes — use allSettled so one failure doesn't abort others
@@ -68,6 +92,8 @@ export class AccessService {
       accessLogId: accessLog.id,
       status: accessLog.status,
       expiresAt: accessLog.expiresAt,
+      locationShared: Boolean(accessLog.location),
+      locationHistoryExpiresAt: accessLog.location?.historyExpiresAt ?? null,
     };
   }
 
@@ -113,13 +139,17 @@ export class AccessService {
     const newStatus = dto.decision === 'APPROVED' ? 'APPROVED' : 'DENIED';
     const resolvedAt = new Date();
 
-    const updated = await this.prisma.accessLog.updateMany({
-      where: { id: dto.accessLogId, status: 'PENDING', expiresAt: { gt: resolvedAt },
-        vaultItem: { deletedAt: null },
-        requester: { elderlyRelations: { some: { caregiverId, status: 'ACTIVE', permissions: { has: 'APPROVE_ACCESS' } } } } },
-      data: { status: newStatus, approverId: caregiverId, resolvedAt, notes: dto.notes },
+    await this.prisma.serializable(async (transaction) => {
+      const updated = await transaction.accessLog.updateMany({
+        where: { id: dto.accessLogId, status: 'PENDING', expiresAt: { gt: resolvedAt },
+          vaultItem: { deletedAt: null },
+          requester: { elderlyRelations: { some: { caregiverId, status: 'ACTIVE', permissions: { has: 'APPROVE_ACCESS' } } } } },
+        data: { status: newStatus, approverId: caregiverId, resolvedAt, notes: dto.notes },
+      });
+      if (updated.count !== 1) throw new BadRequestException('A solicitacao foi respondida, expirou ou o vinculo foi revogado.');
+      await transaction.accessRequestLocation.deleteMany({ where: { accessLogId: dto.accessLogId,
+        OR: [{ historyExpiresAt: null }, { historyExpiresAt: { lte: resolvedAt } }] } });
     });
-    if (updated.count !== 1) throw new BadRequestException('A solicitacao foi respondida, expirou ou o vinculo foi revogado.');
 
     // Notify elderly user via WebSocket (primary — real-time)
     this.gateway.notifyAccessResolved({
@@ -149,24 +179,14 @@ export class AccessService {
    * Serves as a fallback UI when the FCM push is missed or delayed.
    */
   async findPendingForCaregiver(caregiverId: string) {
-    const activeElderlyIds = await this.prisma.trustedContact.findMany({
-      where: {
-        caregiverId,
-        status: 'ACTIVE',
-        permissions: { has: 'APPROVE_ACCESS' },
-      },
-      select: { elderlyId: true },
-    });
-
-    const elderlyIds = activeElderlyIds.map((c) => c.elderlyId);
-    if (elderlyIds.length === 0) return [];
-
     return this.prisma.accessLog.findMany({
       where: {
         status: 'PENDING',
         expiresAt: { gt: new Date() },
         vaultItem: { deletedAt: null },
-        requesterId: { in: elderlyIds },
+        requester: { isActive: true, elderlyRelations: { some: {
+          caregiverId, status: 'ACTIVE', permissions: { has: 'APPROVE_ACCESS' }, caregiver: { isActive: true },
+        } } },
       },
       select: {
         id: true,
@@ -175,6 +195,7 @@ export class AccessService {
         expiresAt: true,
         requester: { select: { id: true, name: true } },
         vaultItem: { select: { id: true, label: true, category: true } },
+        location: { select: { latitude: true, longitude: true, accuracy: true, capturedAt: true } },
       },
       orderBy: { requestedAt: 'asc' },
     });
@@ -189,6 +210,12 @@ export class AccessService {
    */
   async expirePendingLogs(): Promise<number> {
     const now = new Date();
+    await this.prisma.accessRequestLocation.deleteMany({ where: { OR: [
+      { historyExpiresAt: { lte: now } },
+      { accessLog: { status: { notIn: ['PENDING', 'APPROVED', 'DENIED'] } } },
+      { accessLog: { status: 'PENDING', expiresAt: { lte: now } } },
+      { historyExpiresAt: null, accessLog: { status: { not: 'PENDING' } } },
+    ] } });
 
     // Fetch before updating so we have requester IDs for WS/FCM notifications
     const stale = await this.prisma.accessLog.findMany({
@@ -205,11 +232,15 @@ export class AccessService {
     let count = 0;
 
     // Notify each elderly user (WS primary, FCM fallback)
-    await Promise.allSettled(
+    await Promise.all(
       stale.map(async (log) => {
-        const expired = await this.prisma.accessLog.updateMany({
-          where: { id: log.id, status: 'PENDING', expiresAt: { lte: now } },
-          data: { status: 'EXPIRED', resolvedAt: now },
+        const expired = await this.prisma.serializable(async (transaction) => {
+          const result = await transaction.accessLog.updateMany({
+            where: { id: log.id, status: 'PENDING', expiresAt: { lte: now } },
+            data: { status: 'EXPIRED', resolvedAt: now },
+          });
+          if (result.count === 1) await transaction.accessRequestLocation.deleteMany({ where: { accessLogId: log.id } });
+          return result;
         });
         if (expired.count !== 1) return;
         count += 1;
@@ -248,16 +279,20 @@ export class AccessService {
   }
 
   async history(userId: string, cursor?: string, take = 100) {
-    return this.prisma.accessLog.findMany({
-      where: { OR: [{ requesterId: userId }, { requester: { elderlyRelations: { some: {
-        caregiverId: userId, status: 'ACTIVE', permissions: { has: 'APPROVE_ACCESS' },
-      } } } }] },
+    const results = await this.prisma.accessLog.findMany({
+      where: historyVisibility(userId),
       select: { id: true, status: true, requestedAt: true, resolvedAt: true, expiresAt: true, fallbackUsed: true, notes: true,
+        location: { select: { historyExpiresAt: true } },
         requester: { select: { id: true, name: true } }, approver: { select: { name: true } },
         vaultItem: { select: { id: true, label: true, category: true } } },
       orderBy: [{ requestedAt: 'desc' }, { id: 'desc' }], take,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     });
+    const now = new Date();
+    return results.map(({ location, ...entry }) => ({
+      ...entry, locationHistoryExpiresAt: ['APPROVED', 'DENIED'].includes(entry.status) &&
+        location?.historyExpiresAt && location.historyExpiresAt > now ? location.historyExpiresAt : null,
+    }));
   }
 
   async historyPage(userId: string, cursor?: string) {
@@ -265,10 +300,26 @@ export class AccessService {
     return { items: results.slice(0, 30), nextCursor: results.length > 30 ? results[29].id : null };
   }
 
+  async historyLocation(userId: string, id: string) {
+    const result = await this.prisma.accessLog.findFirst({
+      where: { ...historyVisibility(userId), id, status: { in: ['APPROVED', 'DENIED'] },
+        location: { historyExpiresAt: { gt: new Date() } } },
+      select: { location: { select: { latitude: true, longitude: true, accuracy: true, capturedAt: true, historyExpiresAt: true } } },
+    });
+    if (!result?.location?.historyExpiresAt) {
+      throw new NotFoundException('HISTORY_LOCATION_UNAVAILABLE');
+    }
+    const { historyExpiresAt, ...location } = result.location;
+    return { location, historyExpiresAt };
+  }
+
   async cancel(userId: string, id: string) {
-    const result = await this.prisma.accessLog.updateMany({ where: { id, requesterId: userId, status: 'PENDING' },
-      data: { status: 'CANCELLED', resolvedAt: new Date() } });
-    if (result.count !== 1) throw new BadRequestException('Pedido encerrado ou indisponivel para cancelamento.');
+    await this.prisma.serializable(async (transaction) => {
+      const result = await transaction.accessLog.updateMany({ where: { id, requesterId: userId, status: 'PENDING' },
+        data: { status: 'CANCELLED', resolvedAt: new Date() } });
+      if (result.count !== 1) throw new BadRequestException('Pedido encerrado ou indisponivel para cancelamento.');
+      await transaction.accessRequestLocation.deleteMany({ where: { accessLogId: id } });
+    });
     return { status: 'CANCELLED' as const };
   }
 
@@ -287,6 +338,7 @@ export class AccessService {
         data: { id, vaultItemId: itemId, requesterId: userId, status: 'FALLBACK_GRANTED', fallbackUsed: true,
           requestedAt: occurredAt, resolvedAt: occurredAt, expiresAt: occurredAt, deviceInfo: 'offline_client_report' },
         select: { id: true, status: true } });
+      await this.security.emergency(transaction, userId, itemId, occurredAt);
       return { result, created: true };
     });
     if (created) {

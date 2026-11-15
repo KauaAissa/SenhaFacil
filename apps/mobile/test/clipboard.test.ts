@@ -4,11 +4,13 @@ import { SensitiveClipboardService } from '../src/services/clipboard.service';
 beforeEach(() => jest.useFakeTimers());
 afterEach(() => { jest.useRealTimers(); jest.clearAllMocks(); });
 
-test('sensitive clipboard expires after 30 seconds', async () => {
+test('sensitive clipboard remains available for five minutes and then expires', async () => {
   const service = new SensitiveClipboardService();
   await service.copy('secret');
   expect(await Clipboard.getStringAsync()).toBe('secret');
-  await jest.advanceTimersByTimeAsync(30_000);
+  await jest.advanceTimersByTimeAsync(5 * 60_000 - 1);
+  expect(await Clipboard.getStringAsync()).toBe('secret');
+  await jest.advanceTimersByTimeAsync(1);
   expect(await Clipboard.getStringAsync()).toBe('');
 });
 

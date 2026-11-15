@@ -16,7 +16,7 @@ export class SensitiveClipboardService {
       if (generation !== this.generation) return;
       await Clipboard.setStringAsync(value);
       this.fingerprint = fingerprint;
-      if (generation === this.generation) this.timer = setTimeout(() => { void this.clear().catch(() => undefined); }, 30_000);
+      if (generation === this.generation) this.timer = setTimeout(() => { void this.clear().catch(() => undefined); }, 5 * 60_000);
     });
   }
 

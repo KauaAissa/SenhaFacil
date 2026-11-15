@@ -1,13 +1,13 @@
 import { Stack } from 'expo-router';
-import { colors, fontSizes } from '../../../theme/theme';
+import { useReducedMotion } from 'react-native-reanimated';
 
 export default function VaultStackLayout() {
+  const reducedMotion = useReducedMotion();
   return (
     <Stack
       screenOptions={{
-        headerStyle: { backgroundColor: colors.background },
-        headerTitleStyle: { fontSize: fontSizes.title, color: colors.textPrimary },
-        headerTintColor: colors.primary,
+        headerShown: false,
+        animation: reducedMotion ? 'none' : 'fade',
       }}
     >
       <Stack.Screen name="index" options={{ title: 'Meu Cofre', headerShown: false }} />

@@ -49,11 +49,29 @@ const BATCH_SIZE = 100;
  * Retry: if push or pull fails, the cycle aborts and retries on next
  * connectivity event (items remain synced=false in local DB).
  */
-class SyncService {
+export class SyncService {
   private isSyncing = false;
   private unsubscribe: (() => void) | null = null;
   private generation = 0;
   private retry: ReturnType<typeof setInterval> | null = null;
+  private readonly listeners = new Set<(ownerId: string) => void>();
+
+  subscribe(listener: (ownerId: string) => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
+
+  private notify(generation: number, owner: string | null): void {
+    if (!owner || !this.current(generation, owner)) return;
+    for (const listener of [...this.listeners]) {
+      if (!this.current(generation, owner)) return;
+      if (!this.listeners.has(listener)) continue;
+      try { listener(owner); }
+      catch {
+        console.error('[SyncService] Não foi possível avisar uma tela sobre a atualização do cofre.');
+      }
+    }
+  }
 
   /**
    * Starts the connectivity listener. Call once at app root (e.g., _layout.tsx).
@@ -107,6 +125,16 @@ class SyncService {
         if (!this.current(generation, owner)) return;
         await offlineVaultService.acknowledgeEmergency(event.id);
       }
+      for (let batch = 0; batch < 2; batch++) {
+        if (!this.current(generation, owner)) return;
+        const reports = await offlineVaultService.getSecurityReports();
+        if (!reports.length) break;
+        const result = await apiClient.post<{ acknowledged: string[] }>('/security/reports', { reports });
+        if (!this.current(generation, owner)) return;
+        if (!Array.isArray(result.acknowledged) || result.acknowledged.length !== reports.length ||
+            !reports.every((report) => result.acknowledged.includes(report.id))) throw new Error('SECURITY_REPORT_RECEIPT_INVALID');
+        await offlineVaultService.acknowledgeSecurityReports(result.acknowledged);
+      }
     } finally {
       this.isSyncing = false;
     }
@@ -150,11 +178,17 @@ class SyncService {
     if (!this.current(generation, owner)) return;
 
     // Process server's ID mapping decisions
-    for (const result of results) {
-      if (!this.current(generation, owner)) return;
-      const sent = items.find((item) => item.operationId === result.operationId && item.id === result.clientId);
-      if (!sent) throw new Error('INVALID_SYNC_RECEIPT');
-      await offlineVaultService.acknowledge(sent, result);
+    let changed = false;
+    try {
+      for (const result of results) {
+        if (!this.current(generation, owner)) return;
+        const sent = items.find((item) => item.operationId === result.operationId && item.id === result.clientId);
+        if (!sent) throw new Error('INVALID_SYNC_RECEIPT');
+        await offlineVaultService.acknowledge(sent, result);
+        changed = true;
+      }
+    } finally {
+      if (changed) this.notify(generation, owner);
     }
   }
 
@@ -183,6 +217,7 @@ class SyncService {
     }));
 
     await offlineVaultService.mergeServerData(localItems);
+    this.notify(generation, owner);
   }
 }
 

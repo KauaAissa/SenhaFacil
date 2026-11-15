@@ -27,7 +27,7 @@ export class ContactsController {
 
   /**
    * POST /contacts/invite
-   * Elderly user invites an existing CAREGIVER account by email.
+   * Elderly user invites an existing CAREGIVER account by email or mobile login.
    * Creates a TrustedContact in PENDING status.
    */
   @Post('invite')

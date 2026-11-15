@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { AccessService } from './access.service';
 
@@ -13,10 +13,14 @@ import { AccessService } from './access.service';
  *   3. Sends an FCM push as fallback (in case the WS connection is closed)
  */
 @Injectable()
-export class AccessExpiryService {
+export class AccessExpiryService implements OnModuleInit {
   private readonly logger = new Logger(AccessExpiryService.name);
 
   constructor(private readonly accessService: AccessService) {}
+
+  async onModuleInit(): Promise<void> {
+    await this.handleExpiry();
+  }
 
   @Cron(CronExpression.EVERY_MINUTE)
   async handleExpiry(): Promise<void> {

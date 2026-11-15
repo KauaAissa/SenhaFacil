@@ -1,7 +1,15 @@
-import { IsEmail } from 'class-validator';
+import { IsEmail, IsOptional, IsString, MaxLength, Validate, ValidateIf } from 'class-validator';
+import { LoginIdentifierValidator } from '../../auth/login-identifier';
 
 export class InviteContactDto {
-  /** Email of the caregiver being invited. The caregiver must already have an account. */
+  /** Legacy email contract; new clients can use caregiverIdentifier instead. */
+  @IsOptional()
   @IsEmail()
-  caregiverEmail: string;
+  caregiverEmail?: string;
+
+  @ValidateIf((object: InviteContactDto, value: unknown) => value !== undefined || !object.caregiverEmail)
+  @IsString()
+  @MaxLength(254)
+  @Validate(LoginIdentifierValidator)
+  caregiverIdentifier?: string;
 }

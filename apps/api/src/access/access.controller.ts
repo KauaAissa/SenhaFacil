@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post, Req, UseGuards, Param, Query, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { Body, Controller, Get, Header, HttpCode, HttpStatus, Post, Req, UseGuards, Param, Query, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AccessService } from './access.service';
 import { RequestAccessDto } from './dto/request-access.dto';
@@ -52,18 +52,28 @@ export class AccessController {
    * simply opens the app directly.
    */
   @Get('pending')
+  @Header('Cache-Control', 'no-store')
   findPending(@Req() req: AuthRequest) {
     if (req.user.role !== 'CAREGIVER') throw new ForbiddenException();
     return this.accessService.findPendingForCaregiver(req.user.id);
   }
 
   @Get('history')
+  @Header('Cache-Control', 'no-store')
   history(@Req() req: AuthRequest) { return this.accessService.history(req.user.id); }
 
   @Get('history/page')
+  @Header('Cache-Control', 'no-store')
   historyPage(@Req() req: AuthRequest, @Query('cursor') cursor?: string) {
     if (cursor && !/^[A-Za-z0-9_-]{1,100}$/.test(cursor)) throw new BadRequestException('Pagina invalida.');
     return this.accessService.historyPage(req.user.id, cursor);
+  }
+
+  @Get('history/:id/location')
+  @Header('Cache-Control', 'no-store')
+  historyLocation(@Req() req: AuthRequest, @Param('id') id: string) {
+    if (!/^[A-Za-z0-9_-]{1,100}$/.test(id)) throw new BadRequestException('Solicitacao invalida.');
+    return this.accessService.historyLocation(req.user.id, id);
   }
 
   @Post(':id/cancel')

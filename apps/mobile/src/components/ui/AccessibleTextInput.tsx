@@ -1,13 +1,17 @@
-import { View, TextInput, StyleSheet, type TextInputProps } from 'react-native';
+import { AppState, Pressable, View, TextInput, StyleSheet, type TextInputProps } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { AccessibleText } from './AccessibleText';
-import { colors, fontSizes, spacing, touchTarget } from '../../theme/theme';
+import { fontSizes, spacing, touchTarget } from '../../theme/theme';
+import { useThemeColors } from '../../hooks/useThemeColors';
 import { useAccessibilityStore } from '../../stores/accessibility.store';
-import { useState } from 'react';
+import { useContext, useEffect, useRef, useState } from 'react';
 import { fonts } from '../../theme/theme';
+import { KeyboardFocusContext } from './KeyboardFocusContext';
 
 interface AccessibleTextInputProps extends TextInputProps {
   label: string;
   errorMessage?: string;
+  hint?: string;
 }
 
 /**
@@ -18,48 +22,89 @@ interface AccessibleTextInputProps extends TextInputProps {
 export function AccessibleTextInput({
   label,
   errorMessage,
+  hint,
   style,
   onFocus,
   onBlur,
+  secureTextEntry = false,
   ...rest
 }: AccessibleTextInputProps) {
-  const { textScale, highContrast } = useAccessibilityStore();
+  const textScale = useAccessibilityStore((state) => state.textScale);
+  const colors = useThemeColors();
   const [focused, setFocused] = useState(false);
+  const [visible, setVisible] = useState(false);
+  const input = useRef<TextInput>(null);
+  const ensureVisible = useContext(KeyboardFocusContext);
+  useEffect(() => {
+    if (!secureTextEntry) return;
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') setVisible(false);
+    });
+    return () => subscription.remove();
+  }, [secureTextEntry]);
+  useEffect(() => { if (!rest.value) setVisible(false); }, [rest.value]);
   return (
     <View style={styles.wrapper}>
       <AccessibleText variant="body" bold>
         {label}
       </AccessibleText>
+      <View style={[styles.field, { backgroundColor: focused ? colors.primarySoft : colors.surface,
+        borderColor: errorMessage ? colors.danger : focused ? colors.primary : colors.inputBorder }]}>
       <TextInput
-        style={[styles.input, { fontSize: fontSizes.bodyLarge * textScale, fontFamily: fonts.regular }, focused && { borderColor: colors.primary, backgroundColor: colors.surface }, highContrast && { borderColor: '#000000' }, Boolean(errorMessage) && styles.inputError, style]}
-        onFocus={(event) => { setFocused(true); onFocus?.(event); }}
+        {...rest}
+        ref={input}
+        style={[styles.input, { fontSize: fontSizes.bodyLarge * textScale, fontFamily: fonts.regular,
+          color: colors.textPrimary }, style]}
+        secureTextEntry={secureTextEntry && !visible}
+        autoCapitalize={secureTextEntry ? 'none' : rest.autoCapitalize}
+        autoCorrect={secureTextEntry ? false : rest.autoCorrect}
+        spellCheck={secureTextEntry ? false : rest.spellCheck}
+        onFocus={(event) => {
+          setFocused(true);
+          if (input.current) ensureVisible(input.current);
+          onFocus?.(event);
+        }}
         onBlur={(event) => { setFocused(false); onBlur?.(event); }}
         placeholderTextColor={colors.textSecondary}
         accessibilityLabel={label}
-        {...rest}
+        accessibilityHint={errorMessage || hint}
+        selectionColor={colors.primary}
+        allowFontScaling
+        textAlignVertical={rest.multiline ? 'top' : 'center'}
       />
+      {secureTextEntry && <Pressable
+        onPress={() => setVisible((current) => !current)}
+        disabled={rest.editable === false}
+        accessibilityRole="button"
+        accessibilityLabel={`${visible ? 'Ocultar' : 'Mostrar'} ${label.toLocaleLowerCase('pt-BR')}`}
+        accessibilityState={{ disabled: rest.editable === false, selected: visible }}
+        style={({ pressed }) => [styles.visibility, { backgroundColor: pressed ? colors.primarySoft : 'transparent' }]}
+      >
+        <Ionicons name={visible ? 'eye-off-outline' : 'eye-outline'} size={24} color={colors.primary} accessible={false} />
+        <AccessibleText variant="caption" bold color={colors.primary}>{visible ? 'Ocultar' : 'Ver'}</AccessibleText>
+      </Pressable>}
+      </View>
       {errorMessage ? (
-        <AccessibleText variant="caption" color={colors.danger}>
+        <AccessibleText variant="caption" color={colors.danger} accessibilityLiveRegion="polite">
           {errorMessage}
         </AccessibleText>
-      ) : null}
+      ) : hint ? <AccessibleText variant="caption" style={{ marginTop: spacing.xs }}>{hint}</AccessibleText> : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   wrapper: { marginBottom: spacing.md },
+  field: { flexDirection: 'row', alignItems: 'center', borderWidth: 2, borderRadius: touchTarget.borderRadius, marginTop: spacing.xs },
   input: {
+    flex: 1,
+    minWidth: 0,
     minHeight: touchTarget.minHeight,
-    borderWidth: 2,
-    borderColor: colors.textSecondary,
     borderRadius: touchTarget.borderRadius,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingVertical: 14,
     fontSize: fontSizes.bodyLarge,
-    color: colors.textPrimary,
-    marginTop: spacing.xs,
-    backgroundColor: colors.background,
   },
-  inputError: { borderColor: colors.danger },
+  visibility: { minWidth: touchTarget.minWidth, minHeight: touchTarget.minHeight,
+    alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
 });

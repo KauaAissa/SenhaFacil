@@ -3,6 +3,7 @@ import { encryptVaultItem, decryptVaultItem } from '@senha-facil/crypto';
 import { randomUUID } from 'expo-crypto';
 import type { VaultItemPlaintext } from '@senha-facil/crypto';
 import { vaultCryptoService } from './vault-crypto.service';
+import type { LocalSecurityReport, SecurityReportType } from './vault-activity.service';
 
 // Mirrors the Prisma VaultCategory enum
 type VaultCategory =
@@ -100,6 +101,9 @@ export class OfflineVaultService {
       );
       CREATE TABLE IF NOT EXISTS item_aliases (
         old_id TEXT PRIMARY KEY, new_id TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS security_reports (
+        id TEXT PRIMARY KEY, type TEXT NOT NULL, occurred_at TEXT NOT NULL, count INTEGER NOT NULL CHECK(count > 0)
       );
     `);
     const columns = await this.db.getAllAsync<{ name: string }>('PRAGMA table_info(vault_items)');
@@ -369,6 +373,29 @@ export class OfflineVaultService {
 
   async acknowledgeEmergency(id: string): Promise<void> {
     await this.database.runAsync('DELETE FROM emergency_events WHERE id = ?', [id]);
+  }
+
+  async recordSecurityReport(report: LocalSecurityReport): Promise<void> {
+    const database = this.database;
+    const owner = this.ownerId;
+    await database.runAsync('INSERT OR IGNORE INTO security_reports (id,type,occurred_at,count) VALUES (?,?,?,?)',
+      [report.id, report.type, report.occurredAt, report.count]);
+    if (database !== this.db || owner !== this.ownerId) throw new Error('SESSION_CHANGED');
+  }
+
+  async getSecurityReports(): Promise<LocalSecurityReport[]> {
+    const rows = await this.database.getAllAsync<{ id: string; type: SecurityReportType; occurred_at: string; count: number }>(
+      'SELECT id,type,occurred_at,count FROM security_reports ORDER BY occurred_at,id LIMIT 50');
+    return rows.map((row) => ({ id: row.id, type: row.type, occurredAt: row.occurred_at, count: row.count }));
+  }
+
+  async acknowledgeSecurityReports(ids: string[]): Promise<void> {
+    const database = this.database;
+    const owner = this.ownerId;
+    await database.withExclusiveTransactionAsync(async (transaction) => {
+      for (const id of ids) await transaction.runAsync('DELETE FROM security_reports WHERE id=?', [id]);
+    });
+    if (database !== this.db || owner !== this.ownerId) throw new Error('SESSION_CHANGED');
   }
 }
 

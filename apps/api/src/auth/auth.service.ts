@@ -9,6 +9,8 @@ import type { RegisterDto } from './dto/register.dto';
 import type { LoginDto } from './dto/login.dto';
 import { Cron } from '@nestjs/schedule';
 import type { RecoverAccountDto, RecoveryProofDto, SecurityUpdateDto } from './dto/vault-protection.dto';
+import { loginLookup, normalizeLoginIdentifier, resolveLoginIdentifier } from './login-identifier';
+import { SecurityService } from '../security/security.service';
 
 /** Argon2id parameters — OWASP 2023 recommendation for interactive logins */
 const ARGON2_OPTIONS = {
@@ -30,19 +32,22 @@ export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
-    private readonly config: ConfigService = new ConfigService(),
+    private readonly config: ConfigService,
+    private readonly security: SecurityService,
   ) {}
 
   async register(dto: RegisterDto) {
     if (dto.authVersion !== 2 || dto.kdfSalt !== dto.protection?.salt) throw new BadRequestException('Configuracao de seguranca invalida.');
-    const email = dto.email.trim().toLowerCase();
+    const identifier = resolveLoginIdentifier(dto);
+    const email = identifier.includes('@') ? identifier : null;
+    const loginPhone = email ? null : identifier;
     const exists = await this.prisma.user.findFirst({
-      where: { email: { equals: email, mode: 'insensitive' } },
+      where: loginLookup(identifier),
       select: { id: true },
     });
 
     if (exists) {
-      throw new ConflictException('Email already registered');
+      throw new ConflictException('LOGIN_IDENTIFIER_REGISTERED');
     }
 
     const passwordHash = await argon2.hash(dto.password, ARGON2_OPTIONS);
@@ -51,6 +56,7 @@ export class AuthService {
       data: {
         name: dto.name,
         email,
+        loginPhone,
         phone: dto.phone?.trim() || undefined,
         passwordHash,
         kdfSalt: dto.kdfSalt,
@@ -58,7 +64,7 @@ export class AuthService {
         authVersion: 2, securityVersion: 1, vaultProtection: JSON.parse(JSON.stringify(dto.protection)),
         recoveryHash: await argon2.hash(dto.recoveryCredential, ARGON2_OPTIONS),
       },
-      select: { id: true, email: true, name: true, role: true, kdfSalt: true, authVersion: true, securityVersion: true, vaultProtection: true },
+      select: { id: true, email: true, loginPhone: true, phone: true, name: true, role: true, kdfSalt: true, authVersion: true, securityVersion: true, vaultProtection: true },
     }).catch((error) => {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         throw new ConflictException('E-mail ou telefone ja cadastrado.');
@@ -67,17 +73,21 @@ export class AuthService {
     });
 
     return {
-      ...(await this.createSession(user)),
+      ...(await this.createSession(user, identifier, dto.installationId, dto.devicePlatform, true)),
       user,
     };
   }
 
   async login(dto: LoginDto) {
+    const identifier = resolveLoginIdentifier(dto);
+    await this.security.beforeLogin(identifier);
     const user = await this.prisma.user.findFirst({
-      where: { email: { equals: dto.email.trim().toLowerCase(), mode: 'insensitive' } },
+      where: loginLookup(identifier),
       select: {
         id: true,
         email: true,
+        loginPhone: true,
+        phone: true,
         name: true,
         role: true,
         kdfSalt: true,
@@ -93,37 +103,43 @@ export class AuthService {
     const isValid = await argon2.verify(hashToVerify, dto.password);
 
     if (!user || !isValid || !user.isActive || user.authVersion !== (dto.authVersion ?? 1)) {
+      await this.security.failedLogin(identifier, user?.isActive ? user.id : undefined);
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const safeUser = { id: user.id, email: user.email, name: user.name, role: user.role, kdfSalt: user.kdfSalt,
+    const safeUser = { id: user.id, email: user.email, loginPhone: user.loginPhone, phone: user.phone, name: user.name, role: user.role, kdfSalt: user.kdfSalt,
       authVersion: user.authVersion, securityVersion: user.securityVersion, vaultProtection: user.vaultProtection };
 
     return {
-      ...(await this.createSession(user)),
+      ...(await this.createSession(user, identifier, dto.installationId, dto.devicePlatform)),
       user: safeUser,
     };
   }
 
-  private async createSession(user: { id: string; email: string; role: string; securityVersion: number }) {
+  private async createSession(user: { id: string; email: string | null; role: string; securityVersion: number },
+    identifier: string, installationId?: string, platform?: string, initialRegistration = false) {
     const sessionId = randomUUID();
     const refreshToken = randomBytes(32).toString('base64url');
     await this.prisma.serializable(async (transaction) => {
       const current = await transaction.user.findFirst({ where: { id: user.id, securityVersion: user.securityVersion, isActive: true }, select: { id: true } });
       if (!current) throw new UnauthorizedException('A seguranca da conta mudou. Entre novamente.');
+      const device = await this.security.device(transaction, user.id, installationId, platform, initialRegistration);
+      await this.security.clearLoginFailures(transaction, identifier);
       await transaction.authSession.create({ data: { id: sessionId, userId: user.id, refreshHash: hashToken(refreshToken),
-        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60_000) } });
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60_000), ...device } });
     });
     return { accessToken: this.jwt.sign({ sub: user.id, email: user.email, role: user.role, sid: sessionId }), refreshToken };
   }
 
-  async parameters(email: string) {
-    const user = await this.prisma.user.findFirst({ where: { email: { equals: email.trim().toLowerCase(), mode: 'insensitive' }, isActive: true },
+  async parameters(input: string) {
+    const identifier = normalizeLoginIdentifier(input);
+    if (!identifier) throw new BadRequestException('LOGIN_IDENTIFIER_INVALID');
+    const user = await this.prisma.user.findFirst({ where: { ...loginLookup(identifier), isActive: true },
       select: { kdfSalt: true, authVersion: true, securityVersion: true, vaultProtection: true } });
     if (!user) {
       const secret = this.config.getOrThrow<string>('JWT_SECRET');
-      return { kdfSalt: createHmac('sha256', secret).update(`parameters:${email.trim().toLowerCase()}`).digest('hex').slice(0, 32),
-        authVersion: 2, recoverySalt: createHmac('sha256', secret).update(`recovery:${email.trim().toLowerCase()}`).digest('hex').slice(0, 32) };
+      return { kdfSalt: createHmac('sha256', secret).update(`parameters:${identifier}`).digest('hex').slice(0, 32),
+        authVersion: 2, recoverySalt: createHmac('sha256', secret).update(`recovery:${identifier}`).digest('hex').slice(0, 32) };
     }
     const protection = user.vaultProtection as { recoverySalt?: string } | null;
     return { kdfSalt: user.kdfSalt, authVersion: user.authVersion,
@@ -131,7 +147,7 @@ export class AuthService {
   }
 
   async recoveryInfo(dto: RecoveryProofDto) {
-    const user = await this.prisma.user.findFirst({ where: { email: { equals: dto.email.trim().toLowerCase(), mode: 'insensitive' }, isActive: true } });
+    const user = await this.prisma.user.findFirst({ where: { ...loginLookup(resolveLoginIdentifier(dto)), isActive: true } });
     const valid = await argon2.verify(user?.recoveryHash ?? DUMMY_HASH, dto.recoveryCredential);
     if (!user || !valid || user.authVersion !== 2) throw new UnauthorizedException('Codigo de recuperacao ou conta invalidos.');
     return { protection: user.vaultProtection, securityVersion: user.securityVersion };
@@ -154,13 +170,16 @@ export class AuthService {
         securityVersion: { increment: 1 }, kdfSalt: dto.protection.salt, vaultProtection: JSON.parse(JSON.stringify(dto.protection)) } });
       if (updated.count !== 1) throw new ConflictException('A seguranca mudou em outro aparelho. Entre novamente.');
       await transaction.authSession.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date(), fcmToken: null } });
+      await this.security.record(transaction, { userId, type: dto.recoveryCredential ? 'RECOVERY_KIT_REPLACED' : 'PASSWORD_CHANGED',
+        dedupe: `security:${userId}:${dto.securityVersion + 1}` });
+      await this.security.clearLoginFailures(transaction, user.email ?? user.loginPhone ?? '');
     });
     return { securityVersion: dto.securityVersion + 1 };
   }
 
   async recover(dto: RecoverAccountDto) {
     await this.recoveryInfo(dto);
-    const user = await this.prisma.user.findFirst({ where: { email: { equals: dto.email.trim().toLowerCase(), mode: 'insensitive' }, isActive: true } });
+    const user = await this.prisma.user.findFirst({ where: { ...loginLookup(resolveLoginIdentifier(dto)), isActive: true } });
     if (!user || !user.recoveryHash || !(await argon2.verify(user.recoveryHash, dto.recoveryCredential))) throw new UnauthorizedException();
     const passwordHash = await argon2.hash(dto.credential, ARGON2_OPTIONS);
     const recoveryHash = await argon2.hash(dto.newRecoveryCredential, ARGON2_OPTIONS);
@@ -170,6 +189,8 @@ export class AuthService {
         securityVersion: { increment: 1 }, kdfSalt: dto.protection.salt, vaultProtection: JSON.parse(JSON.stringify(dto.protection)) } });
       if (result.count !== 1) throw new ConflictException('Codigo ja utilizado ou seguranca alterada.');
       await transaction.authSession.updateMany({ where: { userId: user.id }, data: { revokedAt: new Date(), fcmToken: null } });
+      await this.security.record(transaction, { userId: user.id, type: 'ACCOUNT_RECOVERED', dedupe: `recover:${user.id}:${dto.securityVersion + 1}` });
+      await this.security.clearLoginFailures(transaction, resolveLoginIdentifier(dto));
     });
     return { success: true };
   }

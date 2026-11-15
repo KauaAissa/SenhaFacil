@@ -1,5 +1,4 @@
 import {
-  IsEmail,
   IsEnum,
   IsOptional,
   IsString,
@@ -9,23 +8,30 @@ import {
   Equals,
   ValidateNested,
   IsDefined,
+  IsUUID,
+  IsIn,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { VaultProtectionDto } from './vault-protection.dto';
+import { LoginIdentifierDto } from '../login-identifier';
 
 export enum UserRoleDto {
   ELDERLY = 'ELDERLY',
   CAREGIVER = 'CAREGIVER',
 }
 
-export class RegisterDto {
+export class RegisterDto extends LoginIdentifierDto {
+  @IsOptional()
+  @IsUUID()
+  installationId?: string;
+
+  @IsOptional()
+  @IsIn(['ANDROID', 'IOS', 'WEB'])
+  devicePlatform?: string;
   @IsString()
   @MinLength(2)
   @MaxLength(100)
   name: string;
-
-  @IsEmail()
-  email: string;
 
   @IsOptional()
   @IsString()

@@ -2,11 +2,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as admin from 'firebase-admin';
 import { PrismaService } from '../prisma/prisma.service';
+import type { Prisma } from '@prisma/client';
 
 /**
  * Wraps Firebase Admin SDK for sending push notifications via FCM.
  *
- * If FIREBASE_PROJECT_ID is not set (e.g., local dev without Firebase),
+ * If Firebase credentials are not configured (e.g., local dev without Firebase),
  * the service degrades gracefully — all send calls become no-ops with a warning.
  */
 @Injectable()
@@ -16,8 +17,9 @@ export class NotificationsService {
 
   constructor(config: ConfigService, private readonly prisma: PrismaService) {
     const projectId = config.get<string>('FIREBASE_PROJECT_ID');
+    const credentialsFile = config.get<string>('GOOGLE_APPLICATION_CREDENTIALS');
 
-    if (!projectId) {
+    if (!projectId && !credentialsFile) {
       this.logger.warn('Firebase credentials not configured — push notifications disabled.');
       return;
     }
@@ -25,13 +27,16 @@ export class NotificationsService {
     const app = admin.apps.length
       ? admin.app()
       : admin.initializeApp({
-          credential: admin.credential.cert({
-            projectId,
-            privateKey: config
-              .getOrThrow<string>('FIREBASE_PRIVATE_KEY')
-              .replace(/\\n/g, '\n'),
-            clientEmail: config.getOrThrow<string>('FIREBASE_CLIENT_EMAIL'),
-          }),
+          ...(projectId ? { projectId } : {}),
+          credential: credentialsFile
+            ? admin.credential.applicationDefault()
+            : admin.credential.cert({
+                projectId,
+                privateKey: config
+                  .getOrThrow<string>('FIREBASE_PRIVATE_KEY')
+                  .replace(/\\n/g, '\n'),
+                clientEmail: config.getOrThrow<string>('FIREBASE_CLIENT_EMAIL'),
+              }),
         });
 
     this.messaging = admin.messaging(app);
@@ -116,21 +121,40 @@ export class NotificationsService {
       android: { priority: 'high', notification: { channelId: 'sf_access_requests', defaultSound: true } } });
   }
 
-  private async send(userId: string, message: Omit<admin.messaging.TokenMessage, 'token'>): Promise<void> {
+  async sendSecurityAlert(ownerId: string, userId: string, eventId: string): Promise<'SENT' | 'RETRY' | 'UNAVAILABLE'> {
+    return this.send(userId, { notification: { title: 'Aviso de seguranca', body: 'Abra o Senha Facil para conferir uma atividade da conta.' },
+      data: { type: 'SECURITY_EVENT', eventId }, android: { priority: 'high',
+        notification: { channelId: 'sf_access_requests', defaultSound: true } } }, ownerId);
+  }
+
+  private async send(userId: string, message: Omit<admin.messaging.TokenMessage, 'token'>, securityOwnerId?: string): Promise<'SENT' | 'RETRY' | 'UNAVAILABLE'> {
     const messaging = this.messaging;
-    if (!messaging) return;
-    const sessions = await this.prisma.authSession.findMany({ where: { userId, revokedAt: null,
-      expiresAt: { gt: new Date() }, fcmToken: { not: null }, user: { isActive: true } }, select: { id: true, fcmToken: true } })
-      .catch(() => { this.logger.warn('Push session lookup failed.'); return []; });
-    await Promise.allSettled(sessions.map(async (session) => {
-      try { await messaging.send({ ...message, token: session.fcmToken! }); }
+    if (!messaging) return 'UNAVAILABLE';
+    const user: Prisma.UserWhereInput = securityOwnerId && securityOwnerId !== userId
+      ? { isActive: true, caregiverRelations: { some: { elderlyId: securityOwnerId, status: 'ACTIVE',
+        permissions: { has: 'APPROVE_ACCESS' }, elderly: { isActive: true } } } } : { isActive: true };
+    let sessions: { id: string; fcmToken: string | null }[];
+    try {
+      sessions = await this.prisma.authSession.findMany({ where: { userId, revokedAt: null,
+        expiresAt: { gt: new Date() }, fcmToken: { not: null }, user }, select: { id: true, fcmToken: true } });
+    } catch { this.logger.warn('Push session lookup failed.'); return 'RETRY'; }
+    if (!sessions.length) return 'UNAVAILABLE';
+    const results = await Promise.all(sessions.map(async (session): Promise<'SENT' | 'RETRY' | 'UNAVAILABLE'> => {
+      if (!session.fcmToken) return 'UNAVAILABLE';
+      try { await messaging.send({ ...message, token: session.fcmToken }); return 'SENT'; }
       catch (error) {
-        const code = (error as { code?: string }).code;
+        const code = typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string' &&
+          /^messaging\/[a-z-]+$/.test(error.code) ? error.code : 'unknown';
         if (code === 'messaging/registration-token-not-registered' || code === 'messaging/invalid-registration-token') {
-          await this.prisma.authSession.updateMany({ where: { id: session.id, fcmToken: session.fcmToken }, data: { fcmToken: null } });
+          try { await this.prisma.authSession.updateMany({ where: { id: session.id, fcmToken: session.fcmToken }, data: { fcmToken: null } }); }
+          catch { this.logger.warn('Invalid push token cleanup failed.'); return 'RETRY'; }
+          this.logger.warn(`Push delivery failed: ${code}`);
+          return 'UNAVAILABLE';
         }
-        this.logger.warn(`Push delivery failed: ${code ?? 'unknown'}`);
+        this.logger.warn(`Push delivery failed: ${code}`);
+        return 'RETRY';
       }
     }));
+    return results.includes('RETRY') ? 'RETRY' : results.includes('SENT') ? 'SENT' : 'UNAVAILABLE';
   }
 }

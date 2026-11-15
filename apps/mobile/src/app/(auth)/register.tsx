@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View, Alert } from 'react-native';
+import { View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Screen } from '../../components/ui/Screen';
 import { AccessibleText } from '../../components/ui/AccessibleText';
@@ -7,7 +7,12 @@ import { AccessibleTextInput } from '../../components/ui/AccessibleTextInput';
 import { AccessibleButton } from '../../components/ui/AccessibleButton';
 import { useAuthStore, type UserRole } from '../../stores/auth.store';
 import { spacing } from '../../theme/theme';
-import { AccessibleSwitch } from '../../components/ui/AccessibleSwitch';
+import { AccessibleCard } from '../../components/ui/AccessibleCard';
+import { ChoiceChip } from '../../components/ui/ChoiceChip';
+import { ScreenHeading, SectionHeading, Notice } from '../../components/ui/Presentation';
+import { SupportTools } from '../../components/SupportTools';
+import { loginIdentifierError } from '../../services/input-validation';
+import { getErrorMessage } from '../../services/error-messages';
 
 export default function RegisterScreen() {
   const { role: roleParam } = useLocalSearchParams<{ role?: string }>();
@@ -31,8 +36,11 @@ export default function RegisterScreen() {
       setFieldError('Preencha todos os campos.');
       return;
     }
+    if (name.trim().length < 2) { setFieldError('Informe um nome com pelo menos 2 caracteres.'); return; }
+    const invalidEmail = loginIdentifierError(email);
+    if (invalidEmail) { setFieldError(invalidEmail); return; }
     if (password.length < 8 || password.length > 128) {
-      setFieldError('A senha mestra deve ter ao menos 8 caracteres.');
+      setFieldError('Use de 8 a 128 caracteres na senha mestra.');
       return;
     }
     if (password !== confirmPassword) {
@@ -42,9 +50,9 @@ export default function RegisterScreen() {
 
     setSubmitting(true);
     try {
-      await register({ name: name.trim(), email: email.trim().toLowerCase(), password, role });
+      await register({ name: name.trim(), identifier: email, password, role });
     } catch (err) {
-      Alert.alert('Não foi possível criar sua conta', err instanceof Error ? err.message : String(err));
+      setFieldError(getErrorMessage(err, 'Não foi possível criar a conta. Confira os dados e tente novamente.'));
     } finally {
       setPassword(''); setConfirmPassword('');
       setSubmitting(false);
@@ -53,12 +61,18 @@ export default function RegisterScreen() {
 
   return (
     <Screen style={{ maxWidth: 560 }}>
-      <AccessibleButton label="Voltar para entrar" icon="arrow-back-outline" variant="secondary" onPress={() => router.back()} />
-      <AccessibleText variant="title" style={{ marginTop: spacing.lg }}>Criar conta</AccessibleText>
-      <AccessibleSwitch label="Sou familiar cuidador" value={role === 'CAREGIVER'} disabled={submitting}
-        onValueChange={(enabled) => setRole(enabled ? 'CAREGIVER' : 'ELDERLY')} />
-      <AccessibleText variant="caption" style={{ marginBottom: spacing.md }}>{roleLabel}</AccessibleText>
-
+      <ScreenHeading title="Um começo mais tranquilo" eyebrow="CRIAR CONTA" icon="person-add-outline"
+        description="Escolha como você vai usar o Senha Fácil." onBack={() => router.back()} />
+      <AccessibleCard>
+        <SectionHeading title="Esta conta é para..." />
+        <View style={{ gap: spacing.sm }}>
+          <ChoiceChip label="Guardar minhas senhas" icon="key-outline" selected={role === 'ELDERLY'} disabled={submitting} onPress={() => setRole('ELDERLY')} />
+          <ChoiceChip label="Ajudar um familiar" icon="people-outline" selected={role === 'CAREGIVER'} disabled={submitting} onPress={() => setRole('CAREGIVER')} />
+        </View>
+        <AccessibleText variant="caption" style={{ marginTop: spacing.md }}>{roleLabel}</AccessibleText>
+      </AccessibleCard>
+      <AccessibleCard>
+      <SectionHeading title="Seus dados de entrada" />
       <AccessibleTextInput
         label="Nome completo"
         value={name}
@@ -68,13 +82,16 @@ export default function RegisterScreen() {
         maxLength={100}
       />
       <AccessibleTextInput
-        label="E-mail"
+        label="E-mail ou celular com DDD"
         value={email}
         onChangeText={setEmail}
         autoCapitalize="none"
-        keyboardType="email-address"
-        autoComplete="email"
-        textContentType="emailAddress"
+        keyboardType="default"
+        autoComplete="username"
+        textContentType="username"
+        autoCorrect={false}
+        hint="Escolha um deles para entrar. Celular brasileiro: DDD e número, como (11) 91234-5678."
+        maxLength={254}
       />
       <AccessibleTextInput
         label="Senha mestra (mínimo 8 caracteres)"
@@ -89,13 +106,15 @@ export default function RegisterScreen() {
         value={confirmPassword}
         onChangeText={setConfirmPassword}
         secureTextEntry
-        errorMessage={fieldError ?? undefined}
         maxLength={128}
       />
-
+      {fieldError && <Notice tone="danger">{fieldError}</Notice>}
+      <Notice tone="primary" icon="document-lock-outline">Você sempre entrará com a senha mestra. Não enviamos códigos por SMS ou e-mail. Guarde o kit que será exibido após o cadastro: ele é necessário para recuperar o cofre.</Notice>
       <View style={{ marginTop: spacing.md }}>
         <AccessibleButton label="Criar conta" icon="person-add-outline" onPress={handleSubmit} loading={submitting} />
       </View>
+      </AccessibleCard>
+      <SupportTools />
     </Screen>
   );
 }

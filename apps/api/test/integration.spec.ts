@@ -12,18 +12,21 @@ import { AuthService } from '../src/auth/auth.service';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { ContactsService } from '../src/contacts/contacts.service';
+import { SecurityService } from '../src/security/security.service';
 
 const databaseTests = process.env.INTEGRATION_TESTS === '1' ? describe : describe.skip;
 
 databaseTests('PostgreSQL transaction and cascade integration', () => {
   const prisma = new PrismaService();
-  const vault = new VaultService(prisma);
   const notifications = { sendAccessRequest: jest.fn(), sendAccessResolved: jest.fn(), sendEmergency: jest.fn() };
   const gateway = { notifyAccessResolved: jest.fn() };
-  const access = new AccessService(prisma, notifications as unknown as NotificationsService, gateway as unknown as AccessGateway);
+  const security = new SecurityService(prisma, notifications as unknown as NotificationsService,
+    { getOrThrow: () => 'integration-only-secret' } as unknown as ConfigService);
+  const vault = new VaultService(prisma, security);
+  const access = new AccessService(prisma, notifications as unknown as NotificationsService, gateway as unknown as AccessGateway, security);
   const users = new UsersService(prisma);
   const auth = new AuthService(prisma, new JwtService({ secret: 'integration-only-secret' }),
-    { getOrThrow: () => 'integration-only-secret' } as unknown as ConfigService);
+    { getOrThrow: () => 'integration-only-secret' } as unknown as ConfigService, security);
   const ids: string[] = [];
   let owner: string;
   let another: string;
@@ -118,6 +121,7 @@ databaseTests('PostgreSQL transaction and cascade integration', () => {
 
   test('same refresh operation can recover a lost response, but another operation and revoked session cannot', async () => {
     const user = await prisma.user.findUniqueOrThrow({ where: { id: another } });
+    if (!user.email) throw new Error('Email fixture is missing');
     const logged = await auth.login({ email: user.email, password });
     const requestId = randomUUID();
     const first = await auth.refresh(logged.refreshToken, requestId);
@@ -150,6 +154,7 @@ databaseTests('PostgreSQL transaction and cascade integration', () => {
 
   test('simultaneous reinvitations cannot reset a relationship twice', async () => {
     const caregiver = await prisma.user.findFirstOrThrow({ where: { id: { in: caregivers } } });
+    if (!caregiver.email) throw new Error('Email fixture is missing');
     await prisma.trustedContact.updateMany({ where: { elderlyId: another, caregiverId: caregiver.id }, data: { status: 'REVOKED' } });
     const contacts = new ContactsService(prisma);
     const results = await Promise.allSettled([contacts.invite(another, { caregiverEmail: caregiver.email }), contacts.invite(another, { caregiverEmail: caregiver.email })]);

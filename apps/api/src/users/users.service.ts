@@ -11,7 +11,7 @@ export class UsersService {
   async getProfile(userId: string) {
     return this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, name: true, surname: true, dateOfBirth: true, email: true, phone: true, role: true, createdAt: true },
+      select: { id: true, name: true, surname: true, dateOfBirth: true, email: true, loginPhone: true, phone: true, role: true, createdAt: true },
     });
   }
 

@@ -1,0 +1,41 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Senha Facil: Expo Android (Windows)",
+			"type": "process",
+			"command": "powershell.exe",
+			"args": [
+				"-NoProfile",
+				"-Command",
+				"& { $ErrorActionPreference='Stop'; $network=Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' } | Sort-Object { $_.NetIPv4Interface.InterfaceMetric } | Select-Object -First 1; $address=$network.IPv4Address.IPAddress | Select-Object -First 1; if (-not $address) { throw 'Nenhum IPv4 de rede ativo encontrado para o Metro. Conecte o computador a uma rede e tente novamente.' }; $env:TEMP=[Environment]::GetEnvironmentVariable('TEMP','User'); $env:TMP=[Environment]::GetEnvironmentVariable('TMP','User'); $env:EXPO_OFFLINE='1'; $env:EXPO_NO_TELEMETRY='1'; $env:EXPO_PUBLIC_API_URL='http://10.0.2.2:3000'; $env:REACT_NATIVE_PACKAGER_HOSTNAME=$address; pnpm.cmd --filter @senha-facil/mobile exec expo start --dev-client --lan --max-workers 1 --port 8081; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }"
+			],
+			"isBackground": true,
+			"problemMatcher": []
+		},
+		{
+			"label": "Senha Facil: API local (Windows)",
+			"type": "process",
+			"command": "powershell.exe",
+			"args": [
+				"-NoProfile",
+				"-Command",
+				"& { $ErrorActionPreference='Stop'; $env:TEMP='D:\\Android\\Temp'; $env:TMP=$env:TEMP; $env:NODE_OPTIONS='--max-old-space-size=1536'; pnpm.cmd dev:api; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }"
+			],
+			"isBackground": true,
+			"problemMatcher": []
+		},
+		{
+			"label": "Senha Facil: Smartphone USB (Windows)",
+			"type": "process",
+			"command": "powershell.exe",
+			"args": [
+				"-NoProfile",
+				"-Command",
+				"& { $ErrorActionPreference='Stop'; $env:TEMP='D:\\Android\\Temp'; $env:TMP=$env:TEMP; $env:NODE_OPTIONS='--max-old-space-size=1536'; $env:EXPO_OFFLINE='1'; $env:EXPO_NO_TELEMETRY='1'; $env:EXPO_PUBLIC_API_URL='http://127.0.0.1:3000'; $env:REACT_NATIVE_PACKAGER_HOSTNAME='127.0.0.1'; & 'D:\\sdks\\platform-tools\\adb.exe' -d reverse tcp:3000 tcp:3000; if ($LASTEXITCODE -ne 0) { throw 'Conecte um unico celular com Depuracao USB autorizada.' }; & 'D:\\sdks\\platform-tools\\adb.exe' -d reverse tcp:8081 tcp:8081; if ($LASTEXITCODE -ne 0) { throw 'Nao foi possivel conectar o Metro por USB.' }; pnpm.cmd --filter @senha-facil/mobile exec expo start --dev-client --localhost --max-workers 1 --port 8081; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }"
+			],
+			"isBackground": true,
+			"problemMatcher": []
+		}
+	]
+}

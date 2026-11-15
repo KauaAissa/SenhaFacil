@@ -3,6 +3,8 @@ export type { KeyDerivationProvider } from './kdf';
 export { encryptVaultItem, decryptVaultItem } from './vault';
 export { configureRandomSource } from './random';
 export { generatePassword } from './password';
+export { generatePassphrase } from './passphrase';
+export type { PasswordOptions } from './password';
 export { importVaultKey, exportVaultKey, destroyVaultKey } from './key';
 export { encodeBase64, decodeBase64 } from './encoding';
 export type { VaultKey } from './key';

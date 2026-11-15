@@ -6,6 +6,7 @@ import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { AuthParametersDto, RecoveryProofDto, RecoverAccountDto, SecurityUpdateDto } from './dto/vault-protection.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { resolveLoginIdentifier } from './login-identifier';
 
 @Controller('auth')
 export class AuthController {
@@ -35,7 +36,7 @@ export class AuthController {
   @Post('parameters')
   @HttpCode(200)
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
-  parameters(@Body() dto: AuthParametersDto) { return this.authService.parameters(dto.email); }
+  parameters(@Body() dto: AuthParametersDto) { return this.authService.parameters(resolveLoginIdentifier(dto)); }
 
   @Post('recovery-info')
   @HttpCode(200)

@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
-import { IsDefined, IsEmail, IsInt, IsOptional, IsString, Matches, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
+import { IsDefined, IsInt, IsOptional, IsString, Matches, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
+import { LoginIdentifierDto } from '../login-identifier';
 
 export class EnvelopeDto {
   @IsString()
@@ -30,10 +31,7 @@ export class VaultProtectionDto {
   recoveryEnvelope: EnvelopeDto;
 }
 
-export class AuthParametersDto {
-  @IsEmail()
-  email: string;
-}
+export class AuthParametersDto extends LoginIdentifierDto {}
 
 export class RecoveryProofDto extends AuthParametersDto {
   @Matches(/^[0-9a-f]{64}$/)

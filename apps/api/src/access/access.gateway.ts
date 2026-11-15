@@ -9,6 +9,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { Server, Socket } from 'socket.io';
 import { PrismaService } from '../prisma/prisma.service';
+import { getAllowedOrigins } from '../http.config';
 
 interface AuthenticatedSocket extends Socket {
   userId?: string;
@@ -37,7 +38,7 @@ interface AuthenticatedSocket extends Socket {
  */
 @WebSocketGateway({
   namespace: 'access',
-  cors: { origin: process.env.ALLOWED_ORIGINS?.split(',') ?? [] },
+  cors: { origin: getAllowedOrigins() },
   transports: ['websocket'],
 })
 export class AccessGateway implements OnGatewayConnection, OnGatewayDisconnect {

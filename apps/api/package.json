@@ -4,11 +4,13 @@
   "private": true,
   "scripts": {
     "build": "nest build",
+    "start:prod": "node dist/main.js",
     "dev": "nest start --watch",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src test",
     "test": "jest",
     "db:generate": "prisma generate",
+    "db:deploy": "prisma migrate deploy",
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio"
   },

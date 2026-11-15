@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { AuthService } from '../src/auth/auth.service';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { securityMock } from './security-mock';
 
 function createService() {
   const prisma = {
@@ -17,7 +18,7 @@ function createService() {
   prisma.serializable.mockImplementation(async (operation) => operation(prisma));
   const jwt = { sign: jest.fn().mockReturnValue('access-token') };
   return { prisma, jwt, service: new AuthService(prisma as unknown as PrismaService, jwt as unknown as JwtService,
-    { getOrThrow: jest.fn().mockReturnValue('test-only-secret') } as unknown as ConfigService) };
+    { getOrThrow: jest.fn().mockReturnValue('test-only-secret') } as unknown as ConfigService, securityMock()) };
 }
 
 test('refresh rotates a random token and stores only its SHA-256 hash', async () => {
