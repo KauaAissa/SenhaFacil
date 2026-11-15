@@ -35,9 +35,19 @@ interface HttpSession {
 
 test('HTTP protection contract preserves vault data across rotation and recovery', {
   skip: process.env.HTTP_TESTS !== '1', timeout: 60_000,
-}, async () => {
-  const fixtures: { email: string; credential: string; session: HttpSession; prepared: Awaited<ReturnType<typeof createProtection>> }[] = [];
+}, async (context) => {
+  const fixtures: { email: string; credential: string; prepared: Awaited<ReturnType<typeof createProtection>> }[] = [];
   const keys: VaultKey[] = [];
+  context.after(async () => {
+    const cleanup = await Promise.allSettled(fixtures.map(async (fixture) => {
+      const session = await request<HttpSession>('/auth/login', { email: fixture.email, password: fixture.credential, authVersion: 2 });
+      await request('/users/me', { password: fixture.credential }, session.accessToken, 'DELETE', 204);
+      await request('/users/me', undefined, session.accessToken, 'GET', 401);
+    }));
+    const failures = cleanup.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (failures.length) throw new AggregateError(failures.map((result) => result.reason), 'HTTP smoke fixture cleanup failed');
+    console.info(`HTTP smoke cleanup: ${fixtures.length} temporary accounts removed; sessions rejected.`);
+  });
   async function request<Result = unknown>(path: string, body?: unknown, token?: string, method = 'POST', expected = 200): Promise<Result> {
     const response = await fetch(`${process.env.HTTP_API_URL ?? 'http://localhost:3000'}${path}`, { method,
       headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -48,19 +58,28 @@ test('HTTP protection contract preserves vault data across rotation and recovery
   async function register(role: 'ELDERLY' | 'CAREGIVER') {
     const prepared = await createProtection('fictitious HTTP password'); keys.push(prepared.key);
     const email = `${randomUUID()}@example.invalid`;
+    const fixture = { email, credential: prepared.credential, prepared }; fixtures.push(fixture);
     const session = await request<HttpSession>('/auth/register', { name: 'HTTP fixture', email, role, authVersion: 2,
       password: prepared.credential, kdfSalt: prepared.protection.salt, protection: prepared.protection,
       recoveryCredential: prepared.recoveryCredential }, undefined, 'POST', 201);
-    const fixture = { email, credential: prepared.credential, session, prepared }; fixtures.push(fixture); return fixture;
+    return Object.assign(fixture, { session });
   }
   try {
     const owner = await register('ELDERLY'); const caregiver = await register('CAREGIVER');
     const cipher = await encryptVaultItem({ password: 'fictitious vault value' }, owner.prepared.key);
-    const item = await request<{ id: string }>('/vault', { label: 'HTTP fixture item', category: 'OTHER',
-      encryptedPayload: cipher.ciphertext, iv: cipher.iv, requiresApproval: true, isFavorite: false }, owner.session.accessToken, 'POST', 201);
     const contact = await request<{ id: string }>('/contacts/invite', { caregiverEmail: caregiver.email }, owner.session.accessToken, 'POST', 201);
     await request(`/contacts/${contact.id}/accept`, {}, caregiver.session.accessToken);
     await request(`/contacts/${contact.id}/permissions`, { permissions: ['VIEW_ITEMS', 'APPROVE_ACCESS'] }, owner.session.accessToken, 'PATCH');
+    const item = await request<{ id: string }>('/vault', { label: 'HTTP fixture item', category: 'OTHER',
+      encryptedPayload: cipher.ciphertext, iv: cipher.iv, requiresApproval: true, isFavorite: false }, owner.session.accessToken, 'POST', 201);
+    async function readStoredCipher() {
+      const items = await request<{ id: string; encryptedPayload: string; iv: string }[]>('/vault', undefined, owner.session.accessToken, 'GET');
+      const stored = items.find((entry) => entry.id === item.id);
+      assert.ok(stored, 'The vault item must remain stored after changing protection');
+      const payload = { ciphertext: stored.encryptedPayload, iv: stored.iv };
+      assert.deepEqual(payload, cipher, 'Protection changes must preserve the server ciphertext');
+      return payload;
+    }
     for (const decision of ['APPROVED', 'DENIED'] as const) {
       const requested = await request<{ accessLogId: string; status: string }>('/access/request', { vaultItemId: item.id }, owner.session.accessToken, 'POST', 201);
       assert.equal(requested.status, 'PENDING');
@@ -90,7 +109,7 @@ test('HTTP protection contract preserves vault data across rotation and recovery
     await request('/users/me', undefined, owner.session.accessToken, 'GET', 401);
     owner.session = await request<HttpSession>('/auth/login', { email: owner.email, password: owner.credential, authVersion: 2 });
     const changedKey = await openProtection('fictitious changed password', owner.session.user.vaultProtection); keys.push(changedKey);
-    assert.equal((await decryptVaultItem(cipher, changedKey)).password, 'fictitious vault value');
+    assert.equal((await decryptVaultItem(await readStoredCipher(), changedKey)).password, 'fictitious vault value');
 
     const proof = recoveryAuthentication(owner.prepared.recoveryCode, changed.protection.recoverySalt);
     const info = await request<{ protection: VaultProtection; securityVersion: number }>('/auth/recovery-info', { email: owner.email, recoveryCredential: proof });
@@ -101,7 +120,7 @@ test('HTTP protection contract preserves vault data across rotation and recovery
     owner.credential = renewed.credential;
     owner.session = await request<HttpSession>('/auth/login', { email: owner.email, password: owner.credential, authVersion: 2 });
     const recovered = await openProtection('fictitious recovered password', owner.session.user.vaultProtection); keys.push(recovered);
-    assert.equal((await decryptVaultItem(cipher, recovered)).password, 'fictitious vault value');
+    assert.equal((await decryptVaultItem(await readStoredCipher(), recovered)).password, 'fictitious vault value');
     await request('/auth/recovery-info', { email: owner.email, recoveryCredential: proof }, undefined, 'POST', 401);
     const history = await request<{ items: { status: string }[] }>('/access/history/page', undefined, owner.session.accessToken, 'GET');
     assert.equal(history.items[0].status, 'CANCELLED');
@@ -111,9 +130,5 @@ test('HTTP protection contract preserves vault data across rotation and recovery
     assert.ok(refreshed.refreshToken === retry.refreshToken, 'Lost-response retry must return the same refresh token');
   } finally {
     for (const key of keys) destroyVaultKey(key);
-    for (const fixture of fixtures) {
-      const session = await request<HttpSession>('/auth/login', { email: fixture.email, password: fixture.credential, authVersion: 2 });
-      await request('/users/me', { password: fixture.credential }, session.accessToken, 'DELETE', 204);
-    }
   }
 });

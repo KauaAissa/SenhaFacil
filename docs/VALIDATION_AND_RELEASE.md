@@ -4,6 +4,8 @@
 
 O pacote e as configuracoes de Railway estao em [README > Pacote de API para Railway](../README.md#pacote-de-api-para-railway). A preparacao local nao publica servicos nem importa o banco atual.
 
+Em 2026-11-15, API e PostgreSQL18 de demonstracao foram publicados. HealthHTTPS e smoke de contratos com duas contas ficticias passaram; ambas foram removidas. Detalhes/limites em [STATUS](STATUS.md#api-de-demonstracao-publicada-2026-11-15).
+
 Ordem:
 
 1. Enviar a versao atual do codigo ao GitHub, excluindo ambientes privados, contas de servico, chaves de assinatura e arquivos pessoais; conferir CI.
@@ -15,6 +17,16 @@ Ordem:
 7. Definir URL HTTPS em EXPO_PUBLIC_API_URL do perfil preview e gerar APK standalone, preservando assinatura e dados da instalacao existente.
 8. Testar com dois aparelhos por internet movel, sem API/Metro locais, incluindo perdas de rede, recuperacao, acesso assistido e emergencia.
 9. Ensaiar a apresentacao com dados ficticios, disponibilidade/cotas, backup e captura/espelhamento: telas protegidas podem nao ser transmitidas.
+
+Para repetir apenas o smoke de protecao no ambiente de demonstracao autorizado, usando contas ficticias temporarias:
+
+```powershell
+$env:HTTP_TESTS = '1'
+$env:HTTP_API_URL = 'https://senha-facil-api-production.up.railway.app'
+pnpm --filter @senha-facil/crypto exec tsx --test --test-name-pattern=HTTP .\test\protection.test.ts
+```
+
+Execute em um terminal dedicado e feche-o ao terminar. Nao apontar para um ambiente com dados reais sem autorizacao. O teste cria fixtures, exige familiar ativo antes do item assistido e verifica ciphertext persistido, permissoes e recuperacao; o hook de cleanup tenta remover todas as contas e confirma rejeicao das sessoes, propagando falhas.
 
 Validacao local do pacote em 2026-11-15: 30 testes novos focados, tipos/lint/build API, Docker Linux/Argon2, 12 migrations em PostgreSQL 16 isolado, live/ready 200, JWT 401 e ready 503/live 200 apos indisponibilidade do banco. Recursos de teste removidos. Nenhum desses testes comprova o deploy online, TLS do provedor, push real ou APK preview.
 

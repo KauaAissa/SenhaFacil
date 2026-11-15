@@ -10,7 +10,7 @@
 
 **Senha Fácil** é um aplicativo Android para guardar e organizar senhas com criptografia no próprio aparelho. Ele combina uso offline, desbloqueio pelo celular, geração local de senhas e um fluxo opcional de aprovação por familiares, sem entregar a eles as senhas do titular.
 
-> **Estado do projeto:** escopo funcional Android implementado, com testes automatizados e validações locais em emulador e smartphone. A etapa seguinte é preparar a infraestrutura e a distribuição do aplicativo. Publicação, homologação de produção e testes externos pendentes são tratados no [checklist de publicação](#publicação-e-checklist-de-release).
+> **Estado do projeto:** escopo funcional Android implementado. A API de demonstração e o PostgreSQL estão hospedados, com HTTPS e smoke HTTP validado. As integrações no ambiente publicado, o APK independente e a homologação para usuários reais continuam no [checklist de publicação](#publicação-e-checklist-de-release).
 
 ## Sumário
 
@@ -641,6 +641,16 @@ O comando de predeploy acima roda **dentro do container Linux**, na rede privada
 
 Configure `DATABASE_URL` por referência ao PostgreSQL do mesmo projeto, sem expor o banco publicamente. Use um banco de demonstração separado, sem resetar ou importar automaticamente o banco local. A versão testada localmente é PostgreSQL 16; confira a versão oferecida pelo template e valide a implantação efetiva.
 
+No ambiente de TCC, a API está em `https://senha-facil-api-production.up.railway.app`, com PostgreSQL 18 privado. Em 2026-11-15, passaram os healthchecks HTTPS, a rejeição de acesso sem autenticação e o smoke HTTP de proteção/recuperação com duas contas fictícias, removidas ao final. Isso não substitui testes físicos ou validação de push.
+
+Se a referência ao `DATABASE_URL` do banco não resolver, é possível compor a conexão privada na variável da **API**, sem copiar credenciais ou modificar o banco. Para o serviço chamado `Postgres`, com a porta interna padrão 5432:
+
+```text
+postgresql://${{Postgres.POSTGRES_USER}}:${{Postgres.POSTGRES_PASSWORD}}@${{Postgres.RAILWAY_PRIVATE_DOMAIN}}:5432/${{Postgres.POSTGRES_DB}}?sslmode=require
+```
+
+Essa composição foi utilizada no ambiente de demonstração. Os nomes de serviço/variáveis precisam corresponder ao projeto real. Aplique as alterações pendentes e confirme o novo predeploy; não trate uma variável existente ou um build aprovado como prova de conexão.
+
 Defina `NODE_ENV=production` e um `JWT_SECRET` privado de pelo menos 64 caracteres. Valores ilustrativos, banco ausente ou porta inválida impedem a inicialização explicitamente. Mantenha `TRUST_PROXY_HOPS` ausente até confirmar a cadeia de proxy; o recurso aceita somente um número limitado de hops, nunca confiança irrestrita em headers enviados pelo cliente. HTTP e WebSocket utilizam a mesma normalização de `ALLOWED_ORIGINS`.
 
 - `/health/live`: confirma que o processo responde, sem consultar o banco.
@@ -656,7 +666,7 @@ As configurações desta seção são feitas no painel. Não foi adicionado `rai
 - [ ] Definir infraestrutura da API e PostgreSQL, domínio, **HTTPS**, CORS e suporte a WebSocket.
 - [ ] Separar homologação e produção, com segredos privados e bancos independentes.
 - [ ] Gerar Prisma Client e aplicar migrations versionadas após backup validado; nunca usar reset como procedimento de atualização.
-- [ ] Confirmar a CI remota com o código que será distribuído.
+- [x] Confirmar a CI remota do commit `74d20d4`, utilizado no primeiro deploy. Novas alterações exigem nova verificação.
 - [ ] Configurar Firebase e testar notificações reais: recebimento, toque, segundo plano e app encerrado, com titular e familiar.
 - [ ] Validar os fluxos completos em aparelhos físicos: cadastro, login, bloqueio do aparelho, biometria, modo avião, recuperação, revogação, aprovações e falhas de rede.
 - [ ] Validar TalkBack, fonte do sistema ampliada, reduzir movimento e uso por pessoas idosas.

@@ -5,7 +5,7 @@ Ultima atualizacao: 2026-11-15. "Em codigo" nao significa aprovado para producao
 | Item | Entrega Atual | Verificacao Ainda Necessaria |
 | --- | --- | --- |
 | 1. Execucao/criptografia | SDK 54, interoperabilidade AES-GCM e provedor PBKDF2 nativo assincrono | Fluxo completo no development build Android; Expo Go rejeita senha explicitamente |
-| 2. Ambiente | Scripts, env examples, Compose PostgreSQL; pacote Docker API/Linux Node22 e healthchecks, validado em PostgreSQL isolado | Criar banco demo e publicar API/variaveis/HTTPS no Railway; ambientes locais preservados |
+| 2. Ambiente | API Docker/Node22 e PostgreSQL18 demo no Railway; HTTPS/health/contratos HTTP verificados; banco local preservado | Configurar integracoes publicadas, monitoramento e backups/restauracao |
 | 3. Development build | Projeto EAS vinculado; APKs assinados no emulador e ARM64 instalado/aberto no Galaxy A12/Android 13, modulos nativos e API via USB verificados | Login da conta existente e fluxos completos no emulador/aparelho |
 | 4. Isolamento | SQLite/chaves por conta; legado importado apenas se a chave autentica o payload | Atualizacao com banco legado real, multiplas contas/aparelhos |
 | 5. Desbloqueio offline | Perfil em SecureStore, restaura bloqueado, senha local e biometria opt-in por conta/aparelho com chave autenticada; nao aguarda perfil/JWT online | Digital/face forte em aparelho fisico, reinicio em modo aviao e mudanca de biometria |
@@ -25,12 +25,22 @@ Ultima atualizacao: 2026-11-15. "Em codigo" nao significa aprovado para producao
 | 19. Perfil | Login escolhido visivel e nao editavel, telefone de contato separado; atalhos de desbloqueio/senha/kit e acoes organizadas | Atualizacao de perfil e configuracoes de desbloqueio reais no aparelho |
 | 20. Acessibilidade | Atkinson Hyperlegible, 100/120/140%, contraste, botoes/switches de 56px, animacao com reduzir movimento, teclado/scroll e navegacao revisados | TalkBack, fonte do sistema ampliada e idosos participantes |
 | 21. Privacidade | Exclusao/cascatas/anonimizacao testadas em PostgreSQL; retencao, captura, sem backup/permissao de armazenamento Android | Limpeza/captura no aparelho, backups e revisao LGPD |
-| 22. Qualidade/CI | Suites completas API/mobile/crypto, PostgreSQL/HTTP isolado, lint/tipos aprovados; CI migrations/export/Docker | Confirmar execucao remota e completar testes nativos; smoke HTTP exige API de teste em execucao |
+| 22. Qualidade/CI | Suites completas API/mobile/crypto; CI remota74d20d4 aprovada; smoke HTTP publicado e cleanup confirmados | Novas alteracoes exigem nova CI; completar testes nativos e externos |
 | 23. Testes fisicos | Roteiro e smoke nativo no Galaxy A12: abertura, Hermes/modulos e API via USB | Fluxos completos, TalkBack e participantes; smoke nao equivale a estudo de usabilidade |
-| 24. Distribuicao | Perfis EAS, APK development assinado, icone/adaptive/splash/notificacao PNG e roteiro operacional | FCM/HTTPS/monitoramento/backups e validacao de release; nenhum AAB/publicacao |
+| 24. Distribuicao | API HTTPS demo publicada, perfis EAS e APK development assinado | Configurar integracoes, APK standalone, monitoramento/backups e validacao fisica; nenhum AAB/loja |
 | 25. Documento academico | Diagramas/contratos em ARCHITECTURE; remocao do DOCX do versionamento aprovada | Concluir commit da remocao; inserir evidencias anonimas apos testes reais |
 
 ## Evidencias Automatizadas
+
+### API de demonstracao publicada (2026-11-15)
+
+- CI do commit `74d20d4` aprovada no GitHub. API em `https://senha-facil-api-production.up.railway.app`; PostgreSQL18 com volume/rede privada, sem importar ou resetar o banco local.
+- Erros iniciais P1012 de URL invalida/vazia ocorreram antes da conexao. Configurada na API uma URL composta de referencias POSTGRES_* e RAILWAY_PRIVATE_DOMAIN, porta5432/TLS require, sem alterar as variaveis ou imagem do banco.
+- Verificacao externa: health ready/live200 com statusok/no-store; security/events401 sem credenciais. A raiz da API nao tem pagina inicial.
+- Smoke HTTP real aprovado em34,4s: cadastro, familiar/permissaoparaaprovar, aprovacao/negativa/cancelamento, troca de mestra/recuperacao, rejeicao do kit antigo, sessoes revogadas e refreshidempotente. Payload foi relido da API depois de trocar/recuperar e o ciphertext/DEK permaneceram validos.
+- Duas contas ficticias removidas ao final; sessoes retornaram401 apos exclusao. Nenhuma senha real, GPS ou chamada Gemini/FCM usada nessa validacao.
+- Roteirocrypto ajustado localmente para ativar familiar antes de item assistido, conferir payload persistido e executar cleanup de todas as fixtures com falha explicita. Lint e tipos, incluindo checagem direta do teste Node, passaram. Sem alteracao na API publicada, commit ou push.
+- Gemini/Firebase no servidor publicado, APK independente, notificacoes reais e fluxos nativos com dois atores ainda sao etapas seguintes. Hospedagem de demonstracao nao equivale a homologacao de producao.
 
 ### Revisao para envio ao GitHub (2026-11-15)
 
