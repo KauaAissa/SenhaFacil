@@ -18,7 +18,12 @@
     },
     "preview": {
       "distribution": "internal",
-      "android": { "buildType": "apk" }
+      "environment": "preview",
+      "credentialsSource": "remote",
+      "android": { "buildType": "apk" },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://senha-facil-api-production.up.railway.app"
+      }
     },
     "production": {
       "autoIncrement": true,

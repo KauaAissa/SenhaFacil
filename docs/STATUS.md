@@ -19,18 +19,28 @@ Ultima atualizacao: 2026-11-15. "Em codigo" nao significa aprovado para producao
 | 13. Historico | Acesso365dias/GPSconsentido30dias; avisos de seguranca90dias, paginados/autorizados e entrega persistente | Atores reais, push/retencao/restauracao e revogacao em fluxo completo |
 | 14. Cofre | Salvar volta diretamente ao cofre, sem esperar sync; clipboard de login/senha ate cinco minutos com limpeza manual/logout | Fluxos de tela, teclado, suspensao do processo e historico de clipboard do sistema |
 | 15. Organizacao | Busca por nome, categoria, favoritos, decisao explicita de conflito | Interface em aparelhos pequenos e fonte ampliada |
-| 16. Push | Token por sessao, aparelhos ativos, limpeza invalidos, toque verificado, texto privado | Firebase externo adiado; permissao/refresh/encerrado/background em build fisico |
+| 16. Push | Token por sessao; Firebase Admin configurado no Railway, deploy sem warning reportado | Confirmar entrega/token/toque/permissao/background reais no novo APK com dois atores |
 | 17. Recuperacao | DEK preservada, envelopes AES-GCM, kit 256 bits, troca atomica/CAS, revogacao, rotacao do kit e telas completas | Novo aparelho fisico, queda entre etapas, guarda do kit e migracao com dados reais |
-| 18. Gerador/ajuda de IA | Palavras aleatorias portuguesas ou caracteres locais; Gemini opcional em quatro passos. Usuario confirmou IA real funcional; senha sempre local | Cotas/custos reais e validacao com idosos/TalkBack; nao e chatbot ou detector de vazamentos |
+| 18. Gerador/ajuda de IA | Geradores locais e Gemini real validado na API publicada; contrato source/policy/reason e escolhas respeitados | Cotas/custos compartilhados e testes nativos/TalkBack; senha sempre local, nao chatbot |
 | 19. Perfil | Login escolhido visivel e nao editavel, telefone de contato separado; atalhos de desbloqueio/senha/kit e acoes organizadas | Atualizacao de perfil e configuracoes de desbloqueio reais no aparelho |
 | 20. Acessibilidade | Atkinson Hyperlegible, 100/120/140%, contraste, botoes/switches de 56px, animacao com reduzir movimento, teclado/scroll e navegacao revisados | TalkBack, fonte do sistema ampliada e idosos participantes |
 | 21. Privacidade | Exclusao/cascatas/anonimizacao testadas em PostgreSQL; retencao, captura, sem backup/permissao de armazenamento Android | Limpeza/captura no aparelho, backups e revisao LGPD |
 | 22. Qualidade/CI | Suites completas API/mobile/crypto; CI remota74d20d4 aprovada; smoke HTTP publicado e cleanup confirmados | Novas alteracoes exigem nova CI; completar testes nativos e externos |
 | 23. Testes fisicos | Roteiro e smoke nativo no Galaxy A12: abertura, Hermes/modulos e API via USB | Fluxos completos, TalkBack e participantes; smoke nao equivale a estudo de usabilidade |
-| 24. Distribuicao | API HTTPS demo publicada, perfis EAS e APK development assinado | Configurar integracoes, APK standalone, monitoramento/backups e validacao fisica; nenhum AAB/loja |
+| 24. Distribuicao | API HTTPS/Gemini publicados; APK preview independente vCode2 gerado e assinatura/bundle validados | Instalar/testar esse APK, push dois atores, monitoramento/backups; nenhum AAB/loja |
 | 25. Documento academico | Diagramas/contratos em ARCHITECTURE; remocao do DOCX do versionamento aprovada | Concluir commit da remocao; inserir evidencias anonimas apos testes reais |
 
 ## Evidencias Automatizadas
+
+### APK preview independente e integracoes (2026-11-15)
+
+- Gemini na API publicada: available true; resposta source GEMINI, policy length32/symbols true e reason LONGER_FOR_COPY para COPY/REQUIRED/max32, validada pelo contrato correto. Duas chamadas externas autorizadas; primeira respondeu200, mas o validador auxiliar usava o formato errado. Corrigida a verificacao, nao a API. Fixtures removidas e sessoes rejeitadas; nenhum segredo/cofre enviado ao modelo.
+- Firebase Admin configurado diretamente pelo usuario no Railway; deployment sem warning de credenciais ausentes reportado e healthHTTPS200 confirmado. JSON administrativo nao aberto ou enviado pelo assistente. Isso ainda nao comprova entrega de notificacao.
+- Build EAS preview `2975b140-ad6e-43e5-a012-014d76f9001c` FINISHED, com credenciais remotas existentes e freeze-credentials, sem gerar outra assinatura ou submeter a loja.
+- Inspecao real do pacote: 240 arquivos, sem ambientes privados, metadados Git ou JSON administrativo. EAS arquiva metadados Git por padrao; regra explicita .git na .easignore removeu o historico da copia de upload. Client Firebase e fontes Kotlin/crypto preservados.
+- APK `SenhaFacil-TCC-preview-20261115.apk`: 156.596.640 bytes, SHA-256 `814228f680924d2701924d3567ae4c1336a9e30ac286f7805b2aa704443649e3`, pacote com.senhafacil.app, versao0.1.0/versionCode2, nao-debuggable, quatroABIs. Certificado original SHA-256 `5a7ed2e5c03ec1bf184840f619afe2dcd88b541b37e8cdc0f1856a5d969dfd29` e alinhamento16KiB aprovados.
+- Bundle incorporado assets/index.android.bundle de5.385.512 bytes com HTTPS da API publicada. Strings de API localhost/127.0.0.1/10.0.2.2:3000 ausentes; nenhum arquivo de configuracao administrativa identificado no APK.
+- Artefato gerado/validado, mas instalacao e testes fisicos desse release, FCM com dois atores e TalkBack ainda pendentes. Nenhum uninstall, reset, commit ou push feito nesta etapa.
 
 ### API de demonstracao publicada (2026-11-15)
 

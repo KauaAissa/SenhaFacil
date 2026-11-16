@@ -1,5 +1,19 @@
 # Validacao e Distribuicao Android
 
+## APK independente do TCC (2026-11-15)
+
+[Download do APK preview](https://expo.dev/artifacts/eas/4Z06AMW3plUYWaPc1pmclBm5pFbdq8j0qyaGmZhAy6c.apk). Copia local: `D:\Android\Builds\SenhaFacil-TCC-preview-20261115.apk`.
+
+Build EAS `2975b140-ad6e-43e5-a012-014d76f9001c`, versao0.1.0/versionCode2, assinatura original preservada. APK release nao-debuggable, bundle incorporado com APIHTTPS e alinhamento16KiB verificados. SHA-256 `814228f680924d2701924d3567ae4c1336a9e30ac286f7805b2aa704443649e3`.
+
+1. Instalar como atualizacao nos aparelhos de teste, sem uninstall/limpeza. Confirmar assinatura e pacote antes de atualizar uma instalacao existente.
+2. Criar contas ficticias no banco de demonstracao publicado; banco local anterior nao foi importado automaticamente.
+3. Usar internet movel/Wi-Fi normal, sem Metro, API local ou adb reverse, para comprovar independencia do computador.
+4. Testar cofre, gerador local, Gemini, vinculo familiar, pedidos/aprovacoes e notificacoes nos dois aparelhos, incluindo background/toque no aviso.
+5. Testar modo aviao/desbloqueio/kit, leitura ampliada e TalkBack. Verificar captura/espelhamento antes do TCC, sem remover a protecao.
+
+Firebase Admin foi configurado no servidor e Gemini real validado, mas FCM e fluxos nativos deste APK ainda precisam dos testes acima. O build nao foi submetido a Play Store nem homologado para usuarios reais.
+
 ## Implantacao online de demonstracao
 
 O pacote e as configuracoes de Railway estao em [README > Pacote de API para Railway](../README.md#pacote-de-api-para-railway). A preparacao local nao publica servicos nem importa o banco atual.

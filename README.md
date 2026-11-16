@@ -10,7 +10,9 @@
 
 **Senha Fácil** é um aplicativo Android para guardar e organizar senhas com criptografia no próprio aparelho. Ele combina uso offline, desbloqueio pelo celular, geração local de senhas e um fluxo opcional de aprovação por familiares, sem entregar a eles as senhas do titular.
 
-> **Estado do projeto:** escopo funcional Android implementado. A API de demonstração e o PostgreSQL estão hospedados, com HTTPS e smoke HTTP validado. As integrações no ambiente publicado, o APK independente e a homologação para usuários reais continuam no [checklist de publicação](#publicação-e-checklist-de-release).
+> **Estado do projeto:** escopo funcional Android implementado. API e PostgreSQL de demonstração hospedados, Gemini validado e APK preview independente gerado. Recebimento real de notificações, testes físicos desse APK e homologação para usuários reais continuam no [checklist de publicação](#publicação-e-checklist-de-release).
+
+> Segue link do APK: https://expo.dev/artifacts/eas/4Z06AMW3plUYWaPc1pmclBm5pFbdq8j0qyaGmZhAy6c.ap
 
 ## Sumário
 
@@ -570,6 +572,14 @@ Para mudanças posteriores, uma prática recomendada é usar branches curtas, co
 Os perfis EAS estão definidos em [eas.json](apps/mobile/eas.json), mas **não significam que três infraestruturas de backend já estejam publicadas**. Homologação e produção devem usar banco, segredos e URL próprios.
 
 ## Builds Android
+
+### APK independente de demonstração
+
+O [APK preview do TCC](https://expo.dev/artifacts/eas/4Z06AMW3plUYWaPc1pmclBm5pFbdq8j0qyaGmZhAy6c.apk) foi gerado em 2026-11-15: versão `0.1.0`, `versionCode` 2, pacote `com.senhafacil.app`, modo não-debuggable e a mesma assinatura dos APKs anteriores.
+
+O bundle está incorporado e usa `https://senha-facil-api-production.up.railway.app`: não precisa de Metro, Expo Go ou conexão USB para funcionar. Operações online continuam precisando de internet. A assinatura, o alinhamento de 16 KiB e a presença da URL HTTPS foram verificados; testes nativos e push real com dois usuários ainda precisam ser concluídos.
+
+Instale como atualização, sem desinstalar a versão anterior ou limpar o cofre. Esse é um artefato de distribuição interna para demonstração, não uma publicação na Play Store.
 
 ### Desenvolvimento local
 
