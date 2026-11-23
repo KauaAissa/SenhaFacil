@@ -28,7 +28,7 @@
     },
     "android": {
       "package": "com.senhafacil.app",
-      "versionCode": 2,
+      "versionCode": 3,
       "googleServicesFile": "../../google-services.json",
       "allowBackup": false,
       "softwareKeyboardLayoutMode": "resize",
